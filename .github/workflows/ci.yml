@@ -32,12 +32,15 @@ jobs:
       POSTGRES_HOST: localhost
       POSTGRES_PORT: 5432
       POSTGRES_DB: growthtrack
-      # CI uses one role for both URLs — the migrator/app split (docker/postgres/init-roles.sh)
-      # is a deployed-environment least-privilege concern, not a CI correctness concern.
+      # Distinct role names (not all "growthtrack_test") so
+      # docker/postgres/init-roles.sh actually runs for real below, instead
+      # of a no-op CREATE ROLE against a name that already exists.
       POSTGRES_MIGRATOR_USER: growthtrack_test
       POSTGRES_MIGRATOR_PASSWORD: growthtrack_test
-      POSTGRES_APP_USER: growthtrack_test
-      POSTGRES_APP_PASSWORD: growthtrack_test
+      POSTGRES_APP_USER: growthtrack_app_test
+      POSTGRES_APP_PASSWORD: growthtrack_app_test
+      POSTGRES_BACKUP_USER: growthtrack_backup_test
+      POSTGRES_BACKUP_PASSWORD: growthtrack_backup_test
       JWT_SIGNING_KEY: ci-test-signing-key
       TWILIO_ACCOUNT_SID: ci-test-sid
       TWILIO_AUTH_TOKEN: ci-test-token
@@ -52,11 +55,20 @@ jobs:
 
       - run: uv sync --locked
 
+      - name: Provision least-privilege roles (init-roles.sh)
+        env:
+          PGHOST: localhost
+          PGPASSWORD: ${{ env.POSTGRES_MIGRATOR_PASSWORD }}
+          POSTGRES_USER: ${{ env.POSTGRES_MIGRATOR_USER }}
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends postgresql-client
+          ./docker/postgres/init-roles.sh
+
       - name: Lint (ruff)
         run: uv run ruff check .
 
       - name: Type-check (mypy)
-        run: uv run mypy api domain ports adapters scheduler config.py
+        run: uv run mypy api domain ports adapters scheduler config.py alembic/env.py
 
       - name: Import-boundary check (AD-1)
         run: uv run lint-imports
@@ -97,6 +109,21 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  docker-build:
+    # Neither image is built anywhere else in CI — bare `uv`/`npm` steps
+    # above don't exercise the Dockerfiles at all, so a broken COPY path or
+    # multi-stage build regression would otherwise only surface at deploy
+    # time.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build backend image (api/scheduler)
+        run: docker build -f docker/backend.Dockerfile -t growthtrack-backend:ci .
+
+      - name: Build nginx image
+        run: docker build -f docker/nginx.Dockerfile -t growthtrack-nginx:ci .
 
   secret-scan:
     runs-on: ubuntu-latest

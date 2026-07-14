@@ -9,7 +9,7 @@ from alembic import context
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from adapters.persistence.database import Base  # noqa: E402
-from config import get_settings  # noqa: E402
+from config import get_migration_settings  # noqa: E402
 
 # this is the Alembic Config object, which provides
 # access to the values within the .ini file in use.
@@ -21,7 +21,9 @@ if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
 # The migration-capable (DDL) role's URL, not the runtime DML-only one (Task 4).
-config.set_main_option("sqlalchemy.url", get_settings().database_migration_url)
+# Uses MigrationSettings, not the full app Settings — a migration needs only
+# DB credentials, not the unrelated JWT/Twilio fields the running app requires.
+config.set_main_option("sqlalchemy.url", get_migration_settings().database_migration_url)
 
 target_metadata = Base.metadata
 

@@ -1,0 +1,10 @@
+# Deferred Work
+
+## Deferred from: code review of 1-0-project-scaffolding-deployment-foundation (2026-07-14)
+
+- **Backup writes to a local Docker volume, not off-host storage (AC5)** [docker/docker-compose.yml:92-115, docker/backup/pg_dump_daily.sh] — Reason: blocked on hosting provider decision. Off-host storage can't be concretely implemented until a hosting provider is chosen, which is itself an explicitly deferred decision elsewhere in this story. Revisit once hosting is selected.
+- **GET /health reports liveness only, not DB readiness** [api/routes/health.py] — Satisfies AC4's literal "liveness endpoint" wording, but since this endpoint drives every container's `restart: always` healthcheck, a fully-down database currently wouldn't trip automatic recovery. Only matters once a real DB-backed route exists (Story 1.1+).
+- **Nginx only proxies /health and /webhooks/ to the API** [docker/nginx/nginx.conf] — Any future backend route (e.g. Story 1.1's login endpoint) needs a new `location` block added by hand, or it silently falls through to the SPA's `index.html`. Not a bug today (only these two routes exist), but a sharp edge the next story should know about.
+- **create_engine()/create_session_factory() have no singleton caching** [adapters/persistence/database.py:22-24] — Calling `create_engine()` more than once would create redundant connection pools. Currently unreachable (nothing calls it yet); whoever wires up the first real repository should cache it as a singleton.
+- **Postgres bound to 127.0.0.1:5432 on the host in all three environments** [docker/docker-compose.yml:27-28] — Via the single shared compose file. If a staging/production host ever runs another Postgres instance on 5432, this stack fails to start. Contingent on the still-undecided hosting/infra layout.
+- **init-roles.sh only runs once via docker-entrypoint-initdb.d** [docker/postgres/init-roles.sh] — A disaster-recovery restore onto a fresh volume from a `pg_dump` (schema/data only, no roles) needs this script re-run manually. Standard Postgres behavior, undocumented; matters once a DR runbook exists.

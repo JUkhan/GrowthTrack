@@ -24,6 +24,8 @@ services:
       POSTGRES_DB: ${POSTGRES_DB}
       POSTGRES_APP_USER: ${POSTGRES_APP_USER}
       POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+      POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER}
+      POSTGRES_BACKUP_PASSWORD: ${POSTGRES_BACKUP_PASSWORD}
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
@@ -42,7 +44,9 @@ services:
       context: ..
       dockerfile: docker/backend.Dockerfile
     restart: always
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    # Runs the migration chain before serving traffic — nothing else in this
+    # topology applies pending migrations (Story 1.0 review finding).
+    command: sh -c "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"
     environment: *backend-env
     depends_on:
       postgres:
@@ -94,8 +98,10 @@ services:
     restart: always
     entrypoint: ["/bin/sh", "/backup/pg_dump_daily.sh"]
     environment:
-      PGPASSWORD: ${POSTGRES_MIGRATOR_PASSWORD}
-      POSTGRES_MIGRATOR_USER: ${POSTGRES_MIGRATOR_USER}
+      # Read-only role (docker/postgres/init-roles.sh) — the backup job never
+      # needs, and must never hold, DDL rights on the database it dumps.
+      PGPASSWORD: ${POSTGRES_BACKUP_PASSWORD}
+      POSTGRES_BACKUP_USER: ${POSTGRES_BACKUP_USER}
       POSTGRES_DB: ${POSTGRES_DB}
     volumes:
       - ./backup/pg_dump_daily.sh:/backup/pg_dump_daily.sh:ro
@@ -104,11 +110,19 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "pgrep -f pg_dump_daily.sh"]
+      # Alive-process check alone can't prove a dump succeeded (see script:
+      # it stamps /backups/.last_success only after pg_dump+gzip both
+      # exit 0). Require both: the loop is running AND the most recent
+      # attempt actually succeeded within the last ~25h.
+      test:
+        [
+          "CMD-SHELL",
+          "pgrep -f pg_dump_daily.sh && test -f /backups/.last_success && [ $(( $(date -u +%s) - $(cat /backups/.last_success) )) -lt 90000 ]",
+        ]
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 10s
+      start_period: 90s
 
 volumes:
   postgres_data:

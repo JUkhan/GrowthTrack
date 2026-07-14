@@ -57,15 +57,24 @@ asyncio_mode = "auto"
 
 [tool.importlinter]
 root_packages = ["api", "domain", "ports", "adapters", "scheduler"]
+# Required because the contracts below forbid external packages
+# (sqlalchemy, twilio), not just this repo's own packages.
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "Domain depends only on ports (AD-1)"
 type = "forbidden"
 source_modules = ["domain"]
-forbidden_modules = ["adapters", "api", "scheduler"]
+# Forbids the repo's own adapters/api/scheduler packages *and* the specific
+# driver/SDK types AD-1 calls out by name (a Twilio/SQLAlchemy type in a
+# domain/ function signature) — importing them at all is the only way
+# import-linter can catch that, since it checks imports, not signatures.
+# "config" is included too: importing it pulls pydantic-settings/env-var
+# coupling into domain.
+forbidden_modules = ["adapters", "api", "scheduler", "config", "sqlalchemy", "twilio"]
 
 [[tool.importlinter.contracts]]
 name = "Ports stay framework- and adapter-free"
 type = "forbidden"
 source_modules = ["ports"]
-forbidden_modules = ["adapters", "api", "scheduler", "domain"]
+forbidden_modules = ["adapters", "api", "scheduler", "domain", "config", "sqlalchemy", "twilio"]

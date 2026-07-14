@@ -8,6 +8,9 @@ RUN apt-get update \
 
 COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
+RUN groupadd --system app \
+    && useradd --system --gid app --home-dir /app --shell /usr/sbin/nologin app
+
 WORKDIR /app
 
 ENV UV_COMPILE_BYTECODE=1 \
@@ -25,6 +28,9 @@ COPY scheduler/ scheduler/
 COPY alembic/ alembic/
 COPY alembic.ini config.py ./
 
-RUN uv sync --frozen --no-dev
+RUN uv sync --frozen --no-dev \
+    && chown -R app:app /app
+
+USER app
 
 ENV PATH="/app/.venv/bin:$PATH"

@@ -4,7 +4,7 @@ baseline_commit: 70094c216185a946cd2f876d2e7b3aba19437386
 
 # Story 1.0: Project Scaffolding & Deployment Foundation
 
-Status: review
+Status: in-progress
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -52,6 +52,31 @@ so that every other story — in this epic and every epic after it — has a wor
   - [x] Add a secret-scanning step (e.g. `gitleaks`) plus `.gitignore` coverage for `.env`/`.env.*` files — closes an open Low-severity architecture-review gap (no enforcement behind the "secrets never committed" rule)
 - [x] Task 6: Guardrail note for future stories (AC: #7)
   - [x] Add a short repo-root note (README or CONTRIBUTING) stating the source tree, Compose topology, and CI configuration are fixed by this story — no later story re-scaffolds them
+
+### Review Findings
+
+- [x] [Review][Defer] Backup writes to a local Docker volume, not off-host storage (AC5) [docker/docker-compose.yml:92-115, docker/backup/pg_dump_daily.sh] — deferred, pre-existing (blocked on hosting provider decision)
+- [x] [Review][Patch] Backup pipeline can silently produce empty/corrupt dumps with the healthcheck still reporting healthy [docker/backup/pg_dump_daily.sh:14-19]
+- [x] [Review][Patch] Two-role least-privilege DB setup (init-roles.sh) has zero CI coverage [.github/workflows/ci.yml:16-29]
+- [x] [Review][Patch] Neither Dockerfile is built in CI — broken builds only surface at deploy time [.github/workflows/ci.yml]
+- [x] [Review][Patch] Backup job authenticates as the DDL-capable migrator role instead of a dedicated read-only role [docker/docker-compose.yml:92-99]
+- [x] [Review][Patch] AD-1 import-linter contract doesn't forbid domain/ports from importing third-party SDK packages (sqlalchemy, twilio) directly, only this repo's own adapters/api/scheduler packages [pyproject.toml:60-65]
+- [x] [Review][Patch] config.py's DSN builder doesn't URL-escape credentials — a password with @, :, /, or % breaks the connection string [config.py:41-54]
+- [x] [Review][Patch] docker/backend.Dockerfile runs api/scheduler containers as root — no USER directive [docker/backend.Dockerfile]
+- [x] [Review][Patch] scheduler/main.py has no SIGTERM handler — a redeploy kills the process immediately instead of shutting down gracefully [scheduler/main.py:30-33]
+- [x] [Review][Patch] No CORS middleware on the FastAPI app — will block the next story's frontend-to-API calls from the Vite dev server [api/main.py]
+- [x] [Review][Patch] No security headers (HSTS, X-Content-Type-Options, X-Frame-Options) on nginx.conf, notable since /webhooks/ is unauthenticated and internet-facing [docker/nginx/nginx.conf]
+- [x] [Review][Patch] alembic/env.py unconditionally requires JWT/Twilio settings (no defaults) to run any migration [alembic/env.py:23-24]
+- [x] [Review][Patch] Nothing in the compose topology runs `alembic upgrade head` automatically — api/scheduler start against whatever schema state already exists [docker/docker-compose.yml:40-71]
+- [x] [Review][Patch] CI's mypy invocation omits alembic/env.py, which has real logic (sys.path manipulation, settings access) [.github/workflows/ci.yml:59]
+- [x] [Review][Patch] Dependency pinning is inconsistent with the story's "use these exact versions" framing (some `>=`, some `==`; frontend uses caret ranges) [pyproject.toml:5-16, web/package.json]
+- [x] [Review][Patch] Nginx's /health location matches by prefix, not exact path [docker/nginx/nginx.conf:30-34]
+- [x] [Review][Patch] init-roles.sh interpolates the app password directly into a SQL string — a password containing a single quote breaks CREATE ROLE [docker/postgres/init-roles.sh:9]
+- [x] [Review][Defer] GET /health reports liveness only, not DB readiness [api/routes/health.py] — deferred, pre-existing (satisfies AC4's literal wording; matters once a DB-backed route exists)
+- [x] [Review][Defer] Nginx only proxies /health and /webhooks/ — future backend routes need a new location block added by hand [docker/nginx/nginx.conf] — deferred, pre-existing
+- [x] [Review][Defer] create_engine()/create_session_factory() have no singleton caching [adapters/persistence/database.py:22-24] — deferred, pre-existing (currently unreachable, nothing calls it yet)
+- [x] [Review][Defer] Postgres bound to 127.0.0.1:5432 on the host in all three environments via the shared compose file [docker/docker-compose.yml:27-28] — deferred, pre-existing (contingent on undecided hosting/infra layout)
+- [x] [Review][Defer] init-roles.sh only runs once via docker-entrypoint-initdb.d — a disaster-recovery restore onto a fresh volume needs it re-run manually [docker/postgres/init-roles.sh] — deferred, pre-existing
 
 ## Dev Notes
 
@@ -186,3 +211,4 @@ claude-sonnet-5
 ### Change Log
 
 - 2026-07-14: Implemented Story 1.0 in full — backend/frontend source tree, Docker Compose deployment topology, `/health` endpoint, Alembic baseline migration with two-role DB credentials, GitHub Actions CI pipeline, and the repo-root guardrail note. All six tasks complete; all ACs satisfied and verified against real (not mocked) tooling — Docker containers, a live Postgres instance, and the actual lint/type-check/test commands CI runs.
+- 2026-07-14: Adversarial code review (Blind Hunter + Edge Case Hunter + Acceptance Auditor) raised 1 decision-needed and 16 patch findings; user resolved the decision (backup off-host storage deferred, blocked on hosting provider selection) and approved applying all 16 patches. Added a read-only Postgres backup role, non-root Dockerfile user, CORS middleware, Nginx security headers, SIGTERM handling in the scheduler, auto-migration on API startup, a `docker build` CI job, CI coverage for the two-role DB setup, URL-escaped DB credentials, a narrower `MigrationSettings` for Alembic (no longer requires JWT/Twilio env vars), a hardened backup script (explicit failure detection instead of a masked pipe), an exact-match Nginx `/health` location, an import-linter contract closing the SQLAlchemy/Twilio-in-domain gap, exact frontend dependency pins, and quote-safe SQL in `init-roles.sh`. All changes verified against the real toolchain (ruff, mypy, import-linter, pytest, `npm ci`/lint/typecheck/test, and a live 5-container Docker Compose stack: all healthy, HTTPS `/health` reachable with security headers, HTTP→HTTPS redirect, CORS header present, `/healthxyz` now falls through to the SPA instead of the API, both DB roles created with correct least-privilege grants verified by direct INSERT/SELECT probes, non-root container user confirmed, and a real backup file + success marker written). Status set to `in-progress`: the deferred backup off-host-storage gap is high-severity per the review's own triage rule.

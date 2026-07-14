@@ -7,8 +7,13 @@ scattered os.environ calls"). Every layer reads config through
 """
 
 from functools import lru_cache
+from urllib.parse import quote_plus
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _postgres_url(scheme: str, user: str, password: str, host: str, port: int, db: str) -> str:
+    return f"{scheme}://{quote_plus(user)}:{quote_plus(password)}@{host}:{port}/{db}"
 
 
 class Settings(BaseSettings):
@@ -40,20 +45,61 @@ class Settings(BaseSettings):
     @property
     def database_url(self) -> str:
         """Runtime DML-only connection string (api/scheduler)."""
-        return (
-            f"postgresql+asyncpg://{self.postgres_app_user}:{self.postgres_app_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        return _postgres_url(
+            "postgresql+asyncpg",
+            self.postgres_app_user,
+            self.postgres_app_password,
+            self.postgres_host,
+            self.postgres_port,
+            self.postgres_db,
         )
 
     @property
     def database_migration_url(self) -> str:
         """Migration-capable (DDL) connection string (Alembic)."""
-        return (
-            f"postgresql+psycopg://{self.postgres_migrator_user}:{self.postgres_migrator_password}"
-            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        return _postgres_url(
+            "postgresql+psycopg",
+            self.postgres_migrator_user,
+            self.postgres_migrator_password,
+            self.postgres_host,
+            self.postgres_port,
+            self.postgres_db,
+        )
+
+
+class MigrationSettings(BaseSettings):
+    """DB-only settings for Alembic — migrations shouldn't require the
+    unrelated JWT/Twilio fields ``Settings`` needs for the running app."""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str
+    postgres_migrator_user: str
+    postgres_migrator_password: str
+
+    @property
+    def database_migration_url(self) -> str:
+        return _postgres_url(
+            "postgresql+psycopg",
+            self.postgres_migrator_user,
+            self.postgres_migrator_password,
+            self.postgres_host,
+            self.postgres_port,
+            self.postgres_db,
         )
 
 
 @lru_cache
 def get_settings() -> Settings:
     return Settings()  # type: ignore[call-arg]  # fields are sourced from the environment
+
+
+@lru_cache
+def get_migration_settings() -> MigrationSettings:
+    return MigrationSettings()  # type: ignore[call-arg]  # fields are sourced from the environment
