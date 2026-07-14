@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GrowthTrack — Notification History (key screen mock)</title>
+<style>
+/*
+  Governs: DESIGN.md Components (status-badge, data-table-row), Colors (status-*)
+  EXPERIENCE.md: Component Patterns (Data table, Status badge), State Patterns
+           (Failed/retrying, drill-down), Key Flows UJ-3 (Rehana investigates
+           a delivery gap).
+  Content: rows dramatize UJ-3's scenario (a Team B send with one failed,
+           invalid-number recipient) plus a scheduled run for contrast.
+*/
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: Roboto, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: #EDEFF2; color: #1A1D21; padding: 32px;
+}
+.browser-frame { max-width: 1180px; margin: 0 auto; background: #fff; border-radius: 12px; overflow: hidden; box-shadow: 0 8px 24px rgba(20,30,40,0.12); }
+.browser-bar { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: #E3E6EA; border-bottom: 1px solid #D3D7DC; }
+.dot { width: 10px; height: 10px; border-radius: 9999px; background: #C9CDD3; }
+.url { margin-left: 12px; font-size: 12px; color: #667085; background: #fff; border: 1px solid #D3D7DC; border-radius: 6px; padding: 4px 10px; }
+.app { display: flex; min-height: 680px; }
+.sidebar { width: 216px; background: #0F3A52; color: #fff; padding: 20px 12px; flex-shrink: 0; }
+.brand { font-weight: 600; font-size: 18px; padding: 0 8px 20px; letter-spacing: -0.01em; }
+.brand span { color: #34D399; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; color: #C9D6DE; margin-bottom: 2px; }
+.nav-item.active { background: #154D71; color: #fff; font-weight: 500; }
+.main { flex: 1; padding: 28px 32px; background: #F7F8FA; }
+h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+.crumb { font-size: 12px; color: #667085; margin-bottom: 18px; }
+.toolbar { display: flex; gap: 10px; margin-bottom: 14px; }
+.toolbar input, .toolbar select { border: 1px solid #D3D7DC; border-radius: 8px; padding: 8px 10px; font-size: 13px; font-family: inherit; background: #fff; }
+table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #E2E5E9; border-radius: 8px; overflow: hidden; }
+th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #667085; padding: 10px 14px; background: #F7F8FA; border-bottom: 1px solid #E2E5E9; }
+td { padding: 11px 14px; font-size: 13px; border-bottom: 1px solid #F0F1F3; }
+tr:last-child td { border-bottom: none; }
+tr.expanded-parent td { background: #F7FAFB; font-weight: 500; }
+tr.drill-row td { background: #FBFCFD; color: #4A5568; padding-left: 34px; }
+.badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 9999px; }
+.badge.success { background: #E4F5EC; color: #0E7A55; }
+.badge.warning { background: #FCEFDA; color: #8A5A00; }
+.badge.error { background: #FBE6E4; color: #8A241C; }
+.tag { font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 9999px; background: #EAF1F5; color: #154D71; }
+.tag.scheduled { background: #F0F1F3; color: #4A5568; }
+.reason { font-size: 12px; color: #8A241C; }
+.expand-icon { color: #94A0AC; margin-right: 6px; }
+</style>
+</head>
+<body>
+<div class="browser-frame">
+  <div class="browser-bar">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    <div class="url">portal.growthtrack.app/notifications/history</div>
+  </div>
+  <div class="app">
+    <div class="sidebar">
+      <div class="brand">Growth<span>Track</span></div>
+      <div class="nav-item">▦ Dashboard</div>
+      <div class="nav-item active">✉ Notifications</div>
+      <div class="nav-item">☰ Recipients</div>
+      <div class="nav-item">⎘ Audit Log</div>
+      <div class="nav-item">⚙ Settings</div>
+    </div>
+    <div class="main">
+      <h1>Notification History</h1>
+      <div class="crumb">Notifications ▸ History</div>
+
+      <div class="toolbar">
+        <input type="text" placeholder="Filter by recipient…" style="flex:1;">
+        <select><option>All dates</option><option>Last 7 days</option></select>
+        <select><option>All types</option><option>Scheduled</option><option>Manual</option></select>
+      </div>
+
+      <table>
+        <thead>
+          <tr><th>Date / Time</th><th>Recipient</th><th>Type</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          <tr class="expanded-parent">
+            <td><span class="expand-icon">▾</span>14 Jul 2026, 09:12</td>
+            <td>Team B (11 recipients)</td>
+            <td><span class="tag">Manual</span></td>
+            <td><span class="badge success">✓ 10 delivered</span> <span class="badge error">✕ 1 failed</span></td>
+          </tr>
+          <tr class="drill-row"><td colspan="2">Rehana Karim (Manager, Team B)</td><td></td><td><span class="badge error">✕ Failed — invalid number</span><div class="reason">Reason: number not reachable on WhatsApp. Retries exhausted.</div></td></tr>
+          <tr class="drill-row"><td colspan="2">…9 more recipients</td><td></td><td><span class="badge success">✓ Delivered</span></td></tr>
+
+          <tr>
+            <td>14 Jul 2026, 07:00</td>
+            <td>All Recipients (430)</td>
+            <td><span class="tag scheduled">Scheduled</span></td>
+            <td><span class="badge success">✓ 428 delivered</span> <span class="badge warning">↻ 2 retrying</span></td>
+          </tr>
+          <tr>
+            <td>13 Jul 2026, 07:00</td>
+            <td>All Recipients (430)</td>
+            <td><span class="tag scheduled">Scheduled</span></td>
+            <td><span class="badge success">✓ 430 delivered</span></td>
+          </tr>
+          <tr>
+            <td>12 Jul 2026, 15:41</td>
+            <td>Farhan Rahman (Sales Rep)</td>
+            <td><span class="tag">Manual</span></td>
+            <td><span class="badge success">✓ Delivered</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+</body>
+</html>

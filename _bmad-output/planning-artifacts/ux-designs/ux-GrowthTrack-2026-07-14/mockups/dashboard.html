@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GrowthTrack — Dashboard (key screen mock)</title>
+<style>
+/*
+  Governs: DESIGN.md Colors, Typography, Elevation & Depth, Shapes, Components
+           (stat-tile, status-badge, button-primary)
+  EXPERIENCE.md: Information Architecture (Dashboard row), Component Patterns
+           (status badge, data table teaser), State Patterns (Loading/Stale),
+           Key Flows UJ-1 (Rehana, entry state).
+  Content: sample figures reused verbatim from sample-whatsapp-report.md
+           (YTD/MTD/Achievement/Growth/Team A-C/Top+Focus Brand). "Today's
+           Sales" has no source value (Dashboard-only field per FR-3) —
+           illustrative placeholder, flagged in caption.
+*/
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: Roboto, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: #EDEFF2;
+  color: #1A1D21;
+  padding: 32px;
+}
+.browser-frame {
+  max-width: 1180px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(20,30,40,0.12);
+}
+.browser-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: #E3E6EA;
+  border-bottom: 1px solid #D3D7DC;
+}
+.dot { width: 10px; height: 10px; border-radius: 9999px; background: #C9CDD3; }
+.url { margin-left: 12px; font-size: 12px; color: #667085; background: #fff; border: 1px solid #D3D7DC; border-radius: 6px; padding: 4px 10px; }
+.app { display: flex; min-height: 640px; }
+.sidebar {
+  width: 216px;
+  background: #0F3A52;
+  color: #fff;
+  padding: 20px 12px;
+  flex-shrink: 0;
+}
+.brand { font-weight: 600; font-size: 18px; padding: 0 8px 20px; letter-spacing: -0.01em; }
+.brand span { color: #34D399; }
+.nav-item {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-radius: 8px; font-size: 14px;
+  color: #C9D6DE; margin-bottom: 2px;
+}
+.nav-item.active { background: #154D71; color: #fff; font-weight: 500; }
+.main { flex: 1; padding: 28px 32px; background: #F7F8FA; }
+.page-head { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 20px; }
+.page-head h1 { font-size: 22px; font-weight: 600; }
+.freshness { font-size: 12px; color: #4A5568; background: #EAF1F5; border: 1px solid #D3E0E6; border-radius: 9999px; padding: 5px 12px; display: inline-flex; align-items: center; gap: 6px; }
+.freshness.stale { background: #FDF0E0; border-color: #F0CE9A; color: #8A5A00; }
+.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+.tile {
+  background: #fff; border: 1px solid #E2E5E9; border-radius: 8px;
+  padding: 16px;
+}
+.tile .label { font-size: 12px; color: #667085; margin-bottom: 6px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.03em; }
+.tile .value {
+  font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums;
+  color: #122130; line-height: 1.15;
+}
+.tile .trend { font-size: 12px; margin-top: 6px; display: flex; align-items: center; gap: 4px; }
+.trend.up { color: #0E7A55; }
+.trend.down { color: #A62E25; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 9999px;
+}
+.badge.success { background: #E4F5EC; color: #0E7A55; }
+.badge.warning { background: #FCEFDA; color: #8A5A00; }
+.badge.error { background: #FBE6E4; color: #8A241C; }
+.section { background: #fff; border: 1px solid #E2E5E9; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
+.section h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+.brand-row { display: flex; justify-content: space-between; align-items: center; padding: 9px 0; border-bottom: 1px solid #F0F1F3; font-size: 13px; }
+.brand-row:last-child { border-bottom: none; }
+.brand-name { font-weight: 500; }
+.tag { font-size: 11px; font-weight: 600; padding: 3px 8px; border-radius: 9999px; }
+.tag.top { background: #E4F5EC; color: #0E7A55; }
+.tag.focus { background: #EAF1F5; color: #154D71; }
+.team-row { display: flex; justify-content: space-between; font-size: 13px; padding: 8px 0; border-bottom: 1px solid #F0F1F3; }
+.team-row:last-child { border-bottom: none; }
+.two-col { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+.altnote { font-size: 11px; color: #94A0AC; margin-top: 10px; border-top: 1px dashed #E2E5E9; padding-top: 10px; }
+</style>
+</head>
+<body>
+<div class="browser-frame">
+  <div class="browser-bar">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    <div class="url">portal.growthtrack.app/dashboard</div>
+  </div>
+  <div class="app">
+    <div class="sidebar">
+      <div class="brand">Growth<span>Track</span></div>
+      <div class="nav-item active">▦ Dashboard</div>
+      <div class="nav-item">✉ Notifications</div>
+      <div class="nav-item">☰ Recipients</div>
+      <div class="nav-item">⎘ Audit Log</div>
+      <div class="nav-item">⚙ Settings</div>
+    </div>
+    <div class="main">
+      <div class="page-head">
+        <h1>Dashboard</h1>
+        <div class="freshness">● Data as of 07:14, Asia/Dhaka</div>
+      </div>
+
+      <div class="grid">
+        <div class="tile"><div class="label">Today's Sales</div><div class="value">1.2 Cr</div></div>
+        <div class="tile"><div class="label">YTD Sales</div><div class="value">100 Cr</div></div>
+        <div class="tile"><div class="label">MTD Sales</div><div class="value">12 Cr</div></div>
+        <div class="tile"><div class="label">MTD Achievement</div><div class="value">40%</div></div>
+        <div class="tile"><div class="label">MTD Growth</div><div class="value">10%</div><div class="trend up">▲ vs last month</div></div>
+        <div class="tile">
+          <div class="label">Notification Status</div>
+          <div style="margin-top:2px;"><span class="badge success">✓ Delivered</span></div>
+          <div style="font-size:12px;color:#667085;margin-top:8px;">07:00 run — 428/430 delivered</div>
+        </div>
+        <div class="tile" style="grid-column: span 2;">
+          <div class="label">Team Performance</div>
+          <div class="team-row"><span>Team A</span><strong>45%</strong></div>
+          <div class="team-row"><span>Team B</span><strong>50%</strong></div>
+          <div class="team-row"><span>Team C</span><strong>40%</strong></div>
+        </div>
+      </div>
+
+      <div class="two-col">
+        <div class="section">
+          <h2>Brand Performance</h2>
+          <div class="brand-row"><span class="brand-name">ABC Pharma</span><span class="tag top">Top Brand</span></div>
+          <div class="brand-row"><span class="brand-name">XYZ Pharma</span><span class="tag focus">Focus Brand</span></div>
+        </div>
+        <div class="section">
+          <h2>Notification Status — alternate state</h2>
+          <div class="freshness stale" style="margin-bottom:10px;">⚠ Data as of 06:02 — source refresh delayed</div>
+          <span class="badge warning">↻ Retrying (2 of 3)</span>
+          <div class="altnote">Illustrates the Stale-data and Retrying state patterns (EXPERIENCE.md State Patterns) side-by-side with the canonical state above — not a real second Dashboard.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

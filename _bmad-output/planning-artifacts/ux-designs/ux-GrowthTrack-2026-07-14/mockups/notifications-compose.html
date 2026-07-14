@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>GrowthTrack — Notifications ▸ Compose (key screen mock)</title>
+<style>
+/*
+  Governs: DESIGN.md Components (button-primary, button-danger, status-badge, Shapes)
+  EXPERIENCE.md: Component Patterns (Recipient picker, Notification composer,
+           Confirmation dialog), State Patterns (Blocked, In-progress),
+           Key Flows UJ-1 (Rehana sends an urgent update).
+  Content: scenario is UJ-1 verbatim (Team B, revised quarterly target).
+           Template name/variables are illustrative — no WhatsApp template
+           library exists yet; real template text is an open build item.
+*/
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: Roboto, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+  background: #EDEFF2;
+  color: #1A1D21;
+  padding: 32px;
+}
+.browser-frame {
+  max-width: 1180px;
+  margin: 0 auto;
+  background: #fff;
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 8px 24px rgba(20,30,40,0.12);
+}
+.browser-bar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 16px; background: #E3E6EA; border-bottom: 1px solid #D3D7DC;
+}
+.dot { width: 10px; height: 10px; border-radius: 9999px; background: #C9CDD3; }
+.url { margin-left: 12px; font-size: 12px; color: #667085; background: #fff; border: 1px solid #D3D7DC; border-radius: 6px; padding: 4px 10px; }
+.app { display: flex; min-height: 680px; }
+.sidebar { width: 216px; background: #0F3A52; color: #fff; padding: 20px 12px; flex-shrink: 0; }
+.brand { font-weight: 600; font-size: 18px; padding: 0 8px 20px; letter-spacing: -0.01em; }
+.brand span { color: #34D399; }
+.nav-item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 8px; font-size: 14px; color: #C9D6DE; margin-bottom: 2px; }
+.nav-item.active { background: #154D71; color: #fff; font-weight: 500; }
+.main { flex: 1; padding: 28px 32px; background: #F7F8FA; display: grid; grid-template-columns: 1.3fr 1fr; gap: 20px; }
+h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+.crumb { font-size: 12px; color: #667085; margin-bottom: 18px; }
+.section { background: #fff; border: 1px solid #E2E5E9; border-radius: 8px; padding: 18px; margin-bottom: 16px; }
+.section h2 { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: #4A5568; margin-bottom: 12px; }
+.chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+.chip { background: #EAF1F5; color: #154D71; font-size: 13px; font-weight: 500; padding: 6px 12px; border-radius: 9999px; display: flex; align-items: center; gap: 6px; }
+.chip button { border: none; background: none; color: #154D71; font-weight: 700; cursor: pointer; }
+.dedupe-note { font-size: 12px; color: #4A5568; background: #F7F8FA; border: 1px solid #E2E5E9; border-radius: 6px; padding: 8px 10px; }
+label { display: block; font-size: 12px; font-weight: 600; color: #4A5568; margin: 12px 0 6px; }
+select, textarea, input[type=text] {
+  width: 100%; border: 1px solid #D3D7DC; border-radius: 8px; padding: 9px 10px;
+  font-size: 13px; font-family: inherit; color: #1A1D21;
+}
+.var-field { background: #FBFBFC; border: 1px solid #E2E5E9; border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+.var-field .k { font-size: 11px; color: #94A0AC; font-weight: 600; }
+.var-field .v { font-size: 13px; margin-top: 2px; }
+.attach-row { display: flex; justify-content: space-between; align-items: center; font-size: 13px; background: #F7F8FA; border: 1px solid #E2E5E9; border-radius: 8px; padding: 10px 12px; margin-top: 10px; }
+.attach-row .meta { font-size: 11px; color: #667085; margin-top: 2px; }
+.wa-preview { background: #E9EDD9; border-radius: 8px; padding: 16px; }
+.wa-bubble { background: #fff; border-radius: 8px; padding: 12px 14px; font-size: 13px; line-height: 1.5; box-shadow: 0 1px 2px rgba(0,0,0,0.08); white-space: pre-line; }
+.wa-time { font-size: 10px; color: #94A0AC; text-align: right; margin-top: 6px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; border: none; border-radius: 8px; padding: 11px 18px; font-size: 14px; font-weight: 600; cursor: pointer; }
+.btn-primary { background: #154D71; color: #fff; }
+.btn-primary[disabled] { background: #9DB3C0; cursor: not-allowed; }
+.btn-ghost { background: none; color: #4A5568; border: 1px solid #D3D7DC; }
+.footer-row { display: flex; justify-content: flex-end; gap: 10px; margin-top: 16px; }
+.state-note { font-size: 11px; color: #94A0AC; margin-top: 14px; border-top: 1px dashed #E2E5E9; padding-top: 10px; }
+.sending { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 600; color: #154D71; }
+.spinner { width: 12px; height: 12px; border-radius: 9999px; border: 2px solid #D3E0E6; border-top-color: #154D71; }
+</style>
+</head>
+<body>
+<div class="browser-frame">
+  <div class="browser-bar">
+    <div class="dot"></div><div class="dot"></div><div class="dot"></div>
+    <div class="url">portal.growthtrack.app/notifications/compose</div>
+  </div>
+  <div class="app">
+    <div class="sidebar">
+      <div class="brand">Growth<span>Track</span></div>
+      <div class="nav-item">▦ Dashboard</div>
+      <div class="nav-item active">✉ Notifications</div>
+      <div class="nav-item">☰ Recipients</div>
+      <div class="nav-item">⎘ Audit Log</div>
+      <div class="nav-item">⚙ Settings</div>
+    </div>
+    <div style="flex:1; padding: 28px 32px; background:#F7F8FA;">
+      <h1>New Manual Notification</h1>
+      <div class="crumb">Notifications ▸ Compose</div>
+
+      <div class="main" style="padding:0;">
+        <div>
+          <div class="section">
+            <h2>Recipients</h2>
+            <div class="chip-row">
+              <div class="chip">Team B <button>×</button></div>
+            </div>
+            <div class="dedupe-note">14 selected → <strong>11 unique recipients</strong> (3 overlaps merged — members of Team B who are also individually listed)</div>
+          </div>
+
+          <div class="section">
+            <h2>Message</h2>
+            <label>Template</label>
+            <select><option>Target Revision Notice</option></select>
+            <div class="var-field"><div class="k">team_name</div><div class="v">Team B</div></div>
+            <div class="var-field"><div class="k">new_target</div><div class="v">Quarterly target revised to 65 Cr BDT, effective immediately</div></div>
+            <div class="var-field"><div class="k">effective_date</div><div class="v">14 Jul 2026</div></div>
+
+            <div class="attach-row">
+              <div>
+                <div>📎 Attach current report</div>
+                <div class="meta">Daily Report — 14 Jul 2026, generated 07:00</div>
+              </div>
+              <input type="checkbox" checked style="width:auto;">
+            </div>
+          </div>
+
+          <div class="footer-row">
+            <button class="btn btn-ghost">Cancel</button>
+            <button class="btn btn-primary">Send to 11 recipients</button>
+          </div>
+          <div class="state-note">Alternate state — mid-send: <span class="sending"><span class="spinner"></span> Sending to 11 recipients…</span> (button disabled, no double-submit). Blocked state: button reads "Select at least one recipient" and stays disabled when the chip row above is empty.</div>
+        </div>
+
+        <div>
+          <div class="section" style="padding:0; overflow:hidden;">
+            <div style="padding:14px 16px 0;"><h2 style="margin-bottom:8px;">Live WhatsApp Preview</h2></div>
+            <div class="wa-preview">
+              <div class="wa-bubble">GrowthTrack Notification
+
+Team B — target update
+
+Quarterly target revised to 65 Cr BDT, effective immediately.
+
+Effective: 14 Jul 2026
+📎 Daily Report — 14 Jul 2026 attached</div>
+              <div class="wa-time">Preview — not yet sent</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
