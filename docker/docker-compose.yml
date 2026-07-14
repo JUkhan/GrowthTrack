@@ -1,0 +1,115 @@
+# Single compose file reused as-is by local dev, staging, and production
+# (AD-5) — environment variance is env-var injection only, via .env.
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  POSTGRES_DB: ${POSTGRES_DB}
+  POSTGRES_MIGRATOR_USER: ${POSTGRES_MIGRATOR_USER}
+  POSTGRES_MIGRATOR_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD}
+  POSTGRES_APP_USER: ${POSTGRES_APP_USER}
+  POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+  JWT_SIGNING_KEY: ${JWT_SIGNING_KEY}
+  TWILIO_ACCOUNT_SID: ${TWILIO_ACCOUNT_SID}
+  TWILIO_AUTH_TOKEN: ${TWILIO_AUTH_TOKEN}
+  TWILIO_WHATSAPP_NUMBER: ${TWILIO_WHATSAPP_NUMBER}
+
+services:
+  postgres:
+    image: postgres:18.4-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_MIGRATOR_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_MIGRATOR_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_APP_USER: ${POSTGRES_APP_USER}
+      POSTGRES_APP_PASSWORD: ${POSTGRES_APP_PASSWORD}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      # postgres:18+ images store data under major-version-specific
+      # subdirectories of /var/lib/postgresql itself, not .../data.
+      - postgres_data:/var/lib/postgresql
+      - ./postgres/init-roles.sh:/docker-entrypoint-initdb.d/init-roles.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_MIGRATOR_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    restart: always
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  scheduler:
+    build:
+      context: ..
+      dockerfile: docker/backend.Dockerfile
+    restart: always
+    command: python -m scheduler.main
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import pathlib,sys,time; p=pathlib.Path('/tmp/scheduler.heartbeat'); sys.exit(0 if p.exists() and time.time()-p.stat().st_mtime < 60 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  nginx:
+    build:
+      context: ..
+      dockerfile: docker/nginx.Dockerfile
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./certs:/etc/nginx/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-check-certificate", "-q", "-O", "/dev/null", "https://localhost/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backup:
+    image: postgres:18.4-alpine
+    restart: always
+    entrypoint: ["/bin/sh", "/backup/pg_dump_daily.sh"]
+    environment:
+      PGPASSWORD: ${POSTGRES_MIGRATOR_PASSWORD}
+      POSTGRES_MIGRATOR_USER: ${POSTGRES_MIGRATOR_USER}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - ./backup/pg_dump_daily.sh:/backup/pg_dump_daily.sh:ro
+      - backups:/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f pg_dump_daily.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  postgres_data:
+  backups:

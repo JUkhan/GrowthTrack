@@ -48,8 +48,8 @@ tracking_system: file-system
 story_location: '{implementation_artifacts}'
 
 development_status:
-  epic-1: backlog
-  1-0-project-scaffolding-deployment-foundation: backlog
+  epic-1: in-progress
+  1-0-project-scaffolding-deployment-foundation: review
   1-1-administrator-login-session: backlog
   1-2-first-run-administrator-bootstrap: backlog
   1-3-role-scoped-portal-access-last-admin-guard: backlog

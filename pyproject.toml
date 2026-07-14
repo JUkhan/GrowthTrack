@@ -1,0 +1,71 @@
+[project]
+name = "growthtrack"
+version = "0.1.0"
+description = "GrowthTrack: sales performance visibility and automated WhatsApp reporting"
+requires-python = ">=3.13"
+dependencies = [
+    "alembic==1.18.5",
+    "apscheduler==3.11.3",
+    "asyncpg>=0.31.0",
+    "fastapi==0.139.0",
+    "psycopg[binary]>=3.3.4",
+    "pwdlib[bcrypt]>=0.3.0",
+    "pydantic-settings>=2.14.2",
+    "pyjwt==2.13.0",
+    "sqlalchemy==2.0.51",
+    "twilio==9.10.9",
+    "uvicorn[standard]>=0.51.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx2>=2.5.0",
+    "import-linter>=2.13",
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.15.21",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["api", "domain", "ports", "adapters", "scheduler"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+extend-exclude = ["alembic/versions", ".claude", "_bmad", "_bmad-output", "web", "docs"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.mypy]
+python_version = "3.13"
+packages = ["api", "domain", "ports", "adapters", "scheduler"]
+strict = false
+ignore_missing_imports = true
+exclude = ["alembic/versions"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+asyncio_mode = "auto"
+
+[tool.importlinter]
+root_packages = ["api", "domain", "ports", "adapters", "scheduler"]
+
+[[tool.importlinter.contracts]]
+name = "Domain depends only on ports (AD-1)"
+type = "forbidden"
+source_modules = ["domain"]
+forbidden_modules = ["adapters", "api", "scheduler"]
+
+[[tool.importlinter.contracts]]
+name = "Ports stay framework- and adapter-free"
+type = "forbidden"
+source_modules = ["ports"]
+forbidden_modules = ["adapters", "api", "scheduler", "domain"]
