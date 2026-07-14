@@ -106,6 +106,12 @@ No arrow points from `domain/` to any `adapters/*` package — that absence is t
 - **Prevents:** "automatic recovery" being read as anything from "someone gets paged" to "full automatic failover" — two incompatible ops models either could build to the same silent spine.
 - **Rule:** Every container in AD-5's compose topology declares a health check and a `restart: always` policy — this is the concrete mechanism satisfying "automatic recovery after failures," not a deferred detail. PostgreSQL data is backed up via an automated daily dump to off-host storage (retention period deferred — PRD Open Question #9). The API exposes a `/health` liveness endpoint polled by an external uptime monitor. Concrete hosting provider and monitoring vendor are deferred (see Deferred) — the mechanism is fixed, the vendor is not.
 
+### AD-11 — Auth security state and Administrator preferences are explicit entities
+
+- **Binds:** FR-1, FR-2, epics.md Story 1.5, Story 1.6, Story 4.4
+- **Prevents:** login-lockout state, password-reset tokens, the Daily Report schedule value, and per-Administrator UI preferences being invented ad hoc (a stray column here, an environment variable there) by whoever picks up the story, since none of these had a named home in the original spine.
+- **Rule:** `User` gains `failed_login_count` and `locked_until` columns — a login attempt while `locked_until` is in the future is rejected before password verification runs; this is a brute-force-lockout concern, distinct from AD-8's session-revocation mechanism. `PasswordResetToken` is a standalone entity (`user_id`, a hashed token — the raw token is never stored, `expires_at`, `used_at`); a token is single-use, invalidated on first use or on expiry, whichever comes first. `ReportSchedule` is a standalone, single-row entity holding the Daily Report's global send time; Administrator edits go through the same domain-service-plus-co-transactional-audit path as every other mutation (AD-7) — it is application data, not deploy-time configuration, so changing it never requires a redeploy (contrast with AD-5's environment-variable secrets). `User` gains a `theme_preference` column (`light` / `dark` / `system`, default `system`) backing the per-Administrator dark-mode override. All four are `adapters/persistence` additions reachable through existing repository patterns — none require a new port or adapter.
+
 ## Consistency Conventions
 
 | Concern | Convention |
@@ -190,9 +196,10 @@ erDiagram
   NOTIFICATION }o--o{ TEAM : "targets"
   NOTIFICATION }o--o{ RECIPIENT_LIST : "targets"
   MESSAGE_TEMPLATE ||--o{ NOTIFICATION : "used by"
+  USER ||--o{ PASSWORD_RESET_TOKEN : "requests"
 ```
 
-`SalesData`, `BrandPerformance`, and `Doctor` are flat reporting entities with no structural relationships to the notification/recipient graph above (`Doctor.Territory` is a plain attribute, not a modeled entity) — they read from the Source System ingestion path (AD-6) and feed `domain/` metrics/ranking logic directly.
+`SalesData`, `BrandPerformance`, and `Doctor` are flat reporting entities with no structural relationships to the notification/recipient graph above (`Doctor.Territory` is a plain attribute, not a modeled entity) — they read from the Source System ingestion path (AD-6) and feed `domain/` metrics/ranking logic directly. `ReportSchedule` (AD-11) is likewise a standalone, relationship-free singleton row, and `failed_login_count`/`locked_until`/`theme_preference` (AD-11) are plain columns on `USER`, not separate entities — none of the four appear in the ERD above for that reason.
 
 ### Source tree
 
@@ -225,6 +232,7 @@ growthtrack/
 | CAP-7 — Doctor visit list | `domain/metrics` (doctor ranking), consumed by CAP-3/4 only | AD-1, AD-6 |
 | CAP-8 — Notification history | `api/notifications/history`, reads `NotificationDelivery` | AD-2, AD-4 |
 | Audit Log (FR-12, cross-cutting) | every mutating `domain/` service method | AD-7 |
+| Auth security state & Administrator preferences (login lockout, password reset, Daily Report schedule, dark-mode preference) | `api/auth`, `api/settings`, `adapters/persistence` | AD-11 |
 
 ## Deferred
 
