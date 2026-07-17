@@ -23,3 +23,9 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def add(self, user: Any) -> None: ...
+
+    @abstractmethod
+    async def has_any_administrator(self) -> bool: ...
+
+    @abstractmethod
+    async def acquire_bootstrap_lock(self) -> None: ...

@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, select
+from sqlalchemy import DateTime, Integer, String, select, text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -65,3 +65,16 @@ class SqlAlchemyUserRepository(UserRepository):
                 created_at=user.created_at,
             )
         )
+
+    async def has_any_administrator(self) -> bool:
+        # Not filtered by status (active/inactive) — see Story 1.2 Dev Notes'
+        # rationale for gating bootstrap on any Administrator row at all.
+        stmt = text("SELECT EXISTS(SELECT 1 FROM users WHERE role = :role)")
+        result = await self._session.execute(stmt, {"role": Role.ADMINISTRATOR.value})
+        return bool(result.scalar())
+
+    async def acquire_bootstrap_lock(self) -> None:
+        # Fixed, arbitrary 32-bit key reserved solely for first-run bootstrap
+        # serialization (Story 1.2) — do not reuse this key elsewhere.
+        # Transaction-scoped: releases automatically on commit/rollback.
+        await self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 890217364})

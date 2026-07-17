@@ -1,11 +1,24 @@
 import { render, screen } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import App from './App'
 
 describe('App shell', () => {
-  it('renders the GrowthTrack heading', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('renders the GrowthTrack heading', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ bootstrap_required: false }), { status: 200 }),
+      ),
+    )
+
     render(<App />)
 
-    expect(screen.getByRole('heading', { name: 'GrowthTrack' })).toBeInTheDocument()
+    expect(
+      await screen.findByRole('heading', { name: 'GrowthTrack' }),
+    ).toBeInTheDocument()
   })
 })
