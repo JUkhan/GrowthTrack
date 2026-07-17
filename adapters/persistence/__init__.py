@@ -4,4 +4,5 @@ required for Alembic autogenerate to see the full schema (see
 """
 
 from adapters.persistence import audit_log as audit_log  # noqa: F401
+from adapters.persistence import sessions as sessions  # noqa: F401
 from adapters.persistence import users as users  # noqa: F401

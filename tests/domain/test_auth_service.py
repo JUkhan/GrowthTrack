@@ -9,14 +9,17 @@ from ports.auth import PwdlibPasswordHasher
 
 
 def _make_user(
-    username: str, password: str, status: UserStatus = UserStatus.ACTIVE
+    username: str,
+    password: str,
+    status: UserStatus = UserStatus.ACTIVE,
+    role: Role = Role.ADMINISTRATOR,
 ) -> User:
     hasher = PwdlibPasswordHasher()
     return User(
         id=uuid.uuid4(),
         username=username,
         hashed_password=hasher.hash(password),
-        role=Role.ADMINISTRATOR,
+        role=role,
         status=status,
         version=1,
         created_at=datetime.now(UTC),
@@ -101,6 +104,24 @@ async def test_authenticate_returns_none_for_inactive_user_even_with_correct_pas
     assert result is None
 
 
+async def test_authenticate_returns_none_for_a_sales_user_even_with_correct_password():
+    user = _make_user("sales", "correct-horse-battery-staple", role=Role.SALES_USER)
+    service = _service([user])
+
+    result = await service.authenticate("sales", "correct-horse-battery-staple")
+
+    assert result is None
+
+
+async def test_authenticate_returns_none_for_a_manager_even_with_correct_password():
+    user = _make_user("manager", "correct-horse-battery-staple", role=Role.MANAGER)
+    service = _service([user])
+
+    result = await service.authenticate("manager", "correct-horse-battery-staple")
+
+    assert result is None
+
+
 async def test_authenticate_runs_a_real_verification_for_a_nonexistent_username():
     """AC #2: a nonexistent-username attempt still runs a bcrypt verification
     (against a fixed dummy hash) rather than short-circuiting, so response
@@ -159,5 +180,16 @@ async def test_login_raises_for_an_inactive_user_and_still_audits_the_failure():
 
     with pytest.raises(InvalidCredentials):
         await service.login("admin", "correct-horse-battery-staple")
+
+    assert audit_log.entries[0].action == "login.failure"
+
+
+async def test_login_raises_for_a_non_administrator_role_and_still_audits_the_failure():
+    user = _make_user("sales", "correct-horse-battery-staple", role=Role.SALES_USER)
+    audit_log = FakeAuditLogRepository()
+    service = AuthenticationService(FakeUserRepository([user]), PwdlibPasswordHasher(), audit_log)
+
+    with pytest.raises(InvalidCredentials):
+        await service.login("sales", "correct-horse-battery-staple")
 
     assert audit_log.entries[0].action == "login.failure"

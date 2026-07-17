@@ -10,13 +10,21 @@ from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
+from adapters.persistence.sessions import SqlAlchemyRevokedTokenRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
-from api.auth.dependencies import ACCESS_TOKEN_COOKIE, get_current_user, get_db
+from api.auth.dependencies import (
+    ACCESS_TOKEN_COOKIE,
+    CurrentSession,
+    get_current_session,
+    get_current_user,
+    get_db,
+)
 from api.auth.tokens import create_access_token
 from config import Settings, get_settings
 from domain.auth import AuthenticationService, InvalidCredentials
 from domain.bootstrap import BootstrapAlreadyComplete, BootstrapService
 from domain.models import User
+from domain.sessions import SessionService
 from ports.auth import PwdlibPasswordHasher
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -118,6 +126,26 @@ async def login(
 async def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse(
         id=current_user.id, username=current_user.username, role=current_user.role.value
+    )
+
+
+@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout(
+    response: Response,
+    current: CurrentSession = Depends(get_current_session),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    session_service = SessionService(
+        SqlAlchemyRevokedTokenRepository(session), SqlAlchemyAuditLogRepository(session)
+    )
+    await session_service.logout(current.user.id, current.jti)
+    await session.commit()
+    settings = get_settings()
+    response.delete_cookie(
+        ACCESS_TOKEN_COOKIE,
+        httponly=True,
+        samesite="lax",
+        secure=settings.environment != "development",
     )
 
 

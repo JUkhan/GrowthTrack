@@ -73,6 +73,13 @@ class SqlAlchemyUserRepository(UserRepository):
         result = await self._session.execute(stmt, {"role": Role.ADMINISTRATOR.value})
         return bool(result.scalar())
 
+    async def count_active_administrators(self) -> int:
+        stmt = text("SELECT COUNT(*) FROM users WHERE role = :role AND status = :status")
+        result = await self._session.execute(
+            stmt, {"role": Role.ADMINISTRATOR.value, "status": UserStatus.ACTIVE.value}
+        )
+        return int(result.scalar_one())
+
     async def acquire_bootstrap_lock(self) -> None:
         # Fixed, arbitrary 32-bit key reserved solely for first-run bootstrap
         # serialization (Story 1.2) — do not reuse this key elsewhere.

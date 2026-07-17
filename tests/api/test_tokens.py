@@ -13,7 +13,24 @@ def test_round_trip_returns_the_same_user_id():
 
     token = create_access_token(user_id)
 
-    assert decode_access_token(token) == user_id
+    assert decode_access_token(token).user_id == user_id
+
+
+def test_round_trip_includes_a_jti():
+    token = create_access_token(uuid.uuid4())
+
+    claims = decode_access_token(token)
+
+    assert isinstance(claims.jti, uuid.UUID)
+
+
+def test_two_tokens_for_the_same_user_have_different_jti():
+    user_id = uuid.uuid4()
+
+    first = decode_access_token(create_access_token(user_id))
+    second = decode_access_token(create_access_token(user_id))
+
+    assert first.jti != second.jti
 
 
 def test_tampered_token_is_rejected():
@@ -65,6 +82,31 @@ def test_token_with_non_uuid_sub_claim_is_rejected():
     settings = get_settings()
     now = datetime.now(UTC)
     payload = {"sub": "not-a-uuid", "iat": now, "exp": now + timedelta(minutes=5)}
+    token = jwt.encode(payload, settings.jwt_signing_key, algorithm=ALGORITHM)
+
+    with pytest.raises(jwt.PyJWTError):
+        decode_access_token(token)
+
+
+def test_token_with_missing_jti_claim_is_rejected():
+    settings = get_settings()
+    now = datetime.now(UTC)
+    payload = {"sub": str(uuid.uuid4()), "iat": now, "exp": now + timedelta(minutes=5)}
+    token = jwt.encode(payload, settings.jwt_signing_key, algorithm=ALGORITHM)
+
+    with pytest.raises(jwt.PyJWTError):
+        decode_access_token(token)
+
+
+def test_token_with_non_uuid_jti_claim_is_rejected():
+    settings = get_settings()
+    now = datetime.now(UTC)
+    payload = {
+        "sub": str(uuid.uuid4()),
+        "jti": "not-a-uuid",
+        "iat": now,
+        "exp": now + timedelta(minutes=5),
+    }
     token = jwt.encode(payload, settings.jwt_signing_key, algorithm=ALGORITHM)
 
     with pytest.raises(jwt.PyJWTError):

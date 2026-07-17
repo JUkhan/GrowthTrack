@@ -52,8 +52,8 @@ development_status:
   1-0-project-scaffolding-deployment-foundation: in-progress
   1-1-administrator-login-session: done
   1-2-first-run-administrator-bootstrap: done
-  1-3-role-scoped-portal-access-last-admin-guard: backlog
-  1-4-session-invalidation-logout-revocation: backlog
+  1-3-role-scoped-portal-access-last-admin-guard: done
+  1-4-session-invalidation-logout-revocation: done
   1-5-login-lockout-password-reset: backlog
   1-6-design-system-foundation-shared-interaction-patterns: backlog
   epic-1-retrospective: optional

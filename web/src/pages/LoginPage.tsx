@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
@@ -17,6 +17,19 @@ function LoginPage() {
   const [submitting, setSubmitting] = useState(false)
   const [bootstrapRequired, setBootstrapRequired] = useState<boolean | null>(null)
   const navigate = useNavigate()
+  const location = useLocation()
+  const [deactivationMessage, setDeactivationMessage] = useState<string | null>(null)
+
+  useEffect(() => {
+    const message = (location.state as { message?: string } | null)?.message
+    if (message) {
+      setDeactivationMessage(message)
+      // Consume the router-state message once so a later back-navigation
+      // to this same history entry doesn't re-show a stale notice.
+      navigate(location.pathname, { replace: true, state: null })
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -86,6 +99,7 @@ function LoginPage() {
         noValidate
         sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
       >
+        {deactivationMessage && <Alert severity="warning">{deactivationMessage}</Alert>}
         {error && <Alert severity="error">{error}</Alert>}
         <TextField
           label="Username"

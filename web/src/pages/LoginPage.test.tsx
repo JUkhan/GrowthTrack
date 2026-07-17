@@ -4,13 +4,13 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import LoginPage from './LoginPage'
 
-function renderLoginPage() {
+function renderLoginPage(state?: { message: string }) {
   const router = createMemoryRouter(
     [
       { path: '/', element: <LoginPage /> },
       { path: '/home', element: <div>Home Placeholder</div> },
     ],
-    { initialEntries: ['/'] },
+    { initialEntries: [state ? { pathname: '/', state } : '/'] },
   )
   render(<RouterProvider router={router} />)
 }
@@ -114,5 +114,25 @@ describe('LoginPage', () => {
       await screen.findByRole('heading', { name: 'Create the first Administrator account' }),
     ).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'GrowthTrack' })).not.toBeInTheDocument()
+  })
+
+  it('shows a warning alert with the router-state message when present', async () => {
+    stubFetch(() => new Response(null, { status: 200 }))
+
+    renderLoginPage({ message: 'Your account has been deactivated. Contact an administrator.' })
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+
+    expect(
+      await screen.findByText('Your account has been deactivated. Contact an administrator.'),
+    ).toBeInTheDocument()
+  })
+
+  it('shows no warning alert when there is no router-state message', async () => {
+    stubFetch(() => new Response(null, { status: 200 }))
+
+    renderLoginPage()
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 })

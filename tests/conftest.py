@@ -22,6 +22,7 @@ async def _clean_tables() -> AsyncIterator[None]:
         # split) has DML grants only, no TRUNCATE/DDL rights.
         await conn.execute(text("DELETE FROM audit_log_entries"))
         await conn.execute(text("DELETE FROM users"))
+        await conn.execute(text("DELETE FROM revoked_tokens"))
     yield
 
 

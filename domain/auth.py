@@ -1,7 +1,7 @@
 """Credential verification + login orchestration (AC #2, #4; AD-7 audit write).
 
-Role enforcement (Story 1.3) and revocation (Story 1.4) are deliberately
-out of scope here — see the story's Dev Notes.
+Revocation (Story 1.4) is deliberately out of scope here — see that story's
+Dev Notes.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from domain.models import AuditLogEntry, User, UserStatus
+from domain.models import AuditLogEntry, Role, User, UserStatus
 from ports.audit import AuditLogRepository
 from ports.auth import PasswordHasher
 from ports.users import UserRepository
@@ -48,7 +48,7 @@ class AuthenticationService:
         # timing doesn't distinguish "wrong password" from "correct password,
         # inactive account" — both must cost one bcrypt verify.
         password_ok = self._password_hasher.verify(password, user.hashed_password)
-        if not password_ok or user.status != UserStatus.ACTIVE:
+        if not password_ok or user.status != UserStatus.ACTIVE or user.role != Role.ADMINISTRATOR:
             return None
 
         return user

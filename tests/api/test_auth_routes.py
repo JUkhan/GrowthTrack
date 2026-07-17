@@ -3,11 +3,12 @@ from datetime import UTC, datetime, timedelta
 import jwt
 from sqlalchemy import text
 
-from adapters.persistence.database import create_engine
+from adapters.persistence.database import create_engine, create_session_factory
+from adapters.persistence.users import UserModel
 from api.auth.dependencies import ACCESS_TOKEN_COOKIE
 from api.auth.tokens import ALGORITHM, create_access_token
 from config import get_settings
-from domain.models import UserStatus
+from domain.models import Role, UserStatus
 
 
 async def _audit_rows() -> list[dict]:
@@ -103,6 +104,27 @@ async def test_inactive_user_cannot_log_in_even_with_correct_password(client, se
     assert ACCESS_TOKEN_COOKIE not in response.cookies
 
 
+async def test_non_administrator_role_returns_the_same_generic_401_shape(client, seed_user):
+    await seed_user(username="sales", password="correct-horse-battery-staple", role=Role.SALES_USER)
+
+    response = await client.post(
+        "/auth/login", json={"username": "sales", "password": "correct-horse-battery-staple"}
+    )
+
+    assert response.status_code == 401
+    assert response.json() == {
+        "error": {
+            "code": "invalid_credentials",
+            "message": "Invalid username or password",
+            "details": None,
+        }
+    }
+    assert ACCESS_TOKEN_COOKIE not in response.cookies
+
+    rows = await _audit_rows()
+    assert rows[-1]["action"] == "login.failure"
+
+
 async def test_malformed_login_body_returns_422_in_the_error_envelope(client):
     response = await client.post("/auth/login", json={"username": "admin"})
 
@@ -187,3 +209,100 @@ async def test_me_with_tampered_token_returns_401(client, seed_user):
     response = await client.get("/auth/me")
 
     assert response.status_code == 401
+
+
+async def test_me_with_a_valid_token_for_a_non_administrator_returns_401(client, seed_user):
+    user, _ = await seed_user(username="sales", role=Role.SALES_USER)
+    token = create_access_token(user.id)
+    client.cookies.set(ACCESS_TOKEN_COOKIE, token)
+
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_logout_returns_204_and_clears_the_cookie(client, seed_user):
+    _, password = await seed_user(username="admin")
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    response = await client.post("/auth/logout")
+
+    assert response.status_code == 204
+    set_cookie_header = response.headers.get("set-cookie", "")
+    assert f'{ACCESS_TOKEN_COOKIE}=""' in set_cookie_header
+    assert "max-age=0" in set_cookie_header.lower()
+
+
+async def test_logout_revokes_the_session_and_subsequent_requests_are_rejected(client, seed_user):
+    _, password = await seed_user(username="admin")
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    logout_response = await client.post("/auth/logout")
+    assert logout_response.status_code == 204
+
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 401
+
+
+async def test_logout_is_scoped_to_its_own_jti_not_the_whole_user(client, seed_user):
+    user, password = await seed_user(username="admin")
+    login_response = await client.post(
+        "/auth/login", json={"username": "admin", "password": password}
+    )
+    assert login_response.status_code == 200
+    token_b = create_access_token(user.id)
+
+    logout_response = await client.post("/auth/logout")
+    assert logout_response.status_code == 204
+
+    client.cookies.set(ACCESS_TOKEN_COOKIE, token_b)
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 200
+
+
+async def test_logout_writes_an_audit_entry(client, seed_user):
+    user, password = await seed_user(username="admin")
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    response = await client.post("/auth/logout")
+
+    assert response.status_code == 204
+    rows = await _audit_rows()
+    assert rows[-1]["action"] == "logout"
+    assert rows[-1]["actor_user_id"] == user.id
+
+
+async def test_logout_without_a_session_returns_401(client):
+    response = await client.post("/auth/logout")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_deactivated_administrator_with_a_still_valid_token_is_rejected_with_an_explanation(
+    client, seed_user
+):
+    user, password = await seed_user(username="admin")
+    login_response = await client.post(
+        "/auth/login", json={"username": "admin", "password": password}
+    )
+    assert login_response.status_code == 200
+
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        db_user = await session.get(UserModel, user.id)
+        db_user.status = UserStatus.INACTIVE.value
+        await session.commit()
+
+    response = await client.get("/auth/me")
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "account_deactivated"
+    assert (
+        body["error"]["message"]
+        == "Your account has been deactivated. Contact an administrator."
+    )
