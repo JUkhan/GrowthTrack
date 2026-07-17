@@ -43,6 +43,12 @@ extend-exclude = ["alembic/versions", ".claude", "_bmad", "_bmad-output", "web",
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection pattern requires Depends()/Cookie()/etc. as
+# argument defaults — that's idiomatic FastAPI, not the mutable-default bug
+# B008 otherwise catches.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Cookie", "fastapi.Query", "fastapi.Header"]
+
 [tool.mypy]
 python_version = "3.13"
 packages = ["api", "domain", "ports", "adapters", "scheduler"]
@@ -54,6 +60,11 @@ exclude = ["alembic/versions"]
 testpaths = ["tests"]
 pythonpath = ["."]
 asyncio_mode = "auto"
+# One event loop for the whole session: adapters/persistence/database.py caches
+# the engine/session factory as process-lifetime singletons (matching the
+# running app), so tests must share the loop those singletons are bound to.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
 
 [tool.importlinter]
 root_packages = ["api", "domain", "ports", "adapters", "scheduler"]

@@ -4,6 +4,8 @@
 stories) registers against, so Alembic autogenerate sees the full schema.
 """
 
+from functools import lru_cache
+
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -19,9 +21,11 @@ class Base(DeclarativeBase):
     pass
 
 
+@lru_cache
 def create_engine() -> AsyncEngine:
     return create_async_engine(get_settings().database_url)
 
 
-def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
-    return async_sessionmaker(engine, expire_on_commit=False)
+@lru_cache
+def create_session_factory() -> async_sessionmaker[AsyncSession]:
+    return async_sessionmaker(create_engine(), expire_on_commit=False)

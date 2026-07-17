@@ -9,6 +9,7 @@ scattered os.environ calls"). Every layer reads config through
 from functools import lru_cache
 from urllib.parse import quote_plus
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -37,6 +38,10 @@ class Settings(BaseSettings):
     postgres_app_password: str
 
     jwt_signing_key: str
+    # 8 hours by default; PRD leaves the exact TTL configurable (AD Deferred).
+    # gt=0: a zero/negative value would issue already-expired tokens and an
+    # immediately-deleted cookie, breaking login with no obvious cause.
+    jwt_expiry_minutes: int = Field(default=480, gt=0)
 
     twilio_account_sid: str
     twilio_auth_token: str

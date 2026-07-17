@@ -3,12 +3,48 @@
 Run with: ``uvicorn api.main:app``
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
+from api.auth.routes import router as auth_router
 from api.routes.health import router as health_router
 
 app = FastAPI(title="GrowthTrack API")
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    """Every REST error response uses one envelope: {error: {code, message, details}}
+    (Architecture spine, Consistency Conventions)."""
+    detail = exc.detail
+    if isinstance(detail, dict) and "code" in detail:
+        code, message, details = detail["code"], detail.get("message", ""), detail.get("details")
+    else:
+        code, message, details = "http_error", str(detail), None
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": code, "message": message, "details": details}},
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(
+    request: Request, exc: RequestValidationError
+) -> JSONResponse:
+    """Request-body validation failures (422) use the same error envelope."""
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": {
+                "code": "validation_error",
+                "message": "Invalid request",
+                "details": jsonable_encoder(exc.errors()),
+            }
+        },
+    )
 
 # Only relevant for local dev: the Vite dev server (5173) calls this API
 # (8000) directly — a different origin. In staging/production the frontend
@@ -23,3 +59,4 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(auth_router)
