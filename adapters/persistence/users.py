@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from adapters.persistence.database import Base
-from domain.models import Role, User, UserStatus
+from domain.models import Role, ThemePreference, User, UserStatus
 from ports.users import UserRepository
 
 
@@ -27,6 +27,7 @@ class UserModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    theme_preference: Mapped[str] = mapped_column(String, nullable=False, default="system")
 
 
 def _to_domain(row: UserModel) -> User:
@@ -40,6 +41,7 @@ def _to_domain(row: UserModel) -> User:
         created_at=row.created_at,
         failed_login_count=row.failed_login_count,
         locked_until=row.locked_until,
+        theme_preference=ThemePreference(row.theme_preference),
     )
 
 
@@ -120,5 +122,13 @@ class SqlAlchemyUserRepository(UserRepository):
             update(UserModel)
             .where(UserModel.id == user_id)
             .values(hashed_password=hashed_password, version=UserModel.version + 1)
+        )
+        await self._session.execute(stmt)
+
+    async def update_theme_preference(self, user_id: uuid.UUID, theme_preference: str) -> None:
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(theme_preference=theme_preference)
         )
         await self._session.execute(stmt)

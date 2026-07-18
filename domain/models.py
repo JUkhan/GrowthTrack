@@ -23,6 +23,12 @@ class UserStatus(StrEnum):
     INACTIVE = "inactive"
 
 
+class ThemePreference(StrEnum):
+    LIGHT = "light"
+    DARK = "dark"
+    SYSTEM = "system"
+
+
 @dataclass
 class User:
     id: uuid.UUID
@@ -34,6 +40,7 @@ class User:
     created_at: datetime
     failed_login_count: int = 0
     locked_until: datetime | None = None
+    theme_preference: ThemePreference = ThemePreference.SYSTEM
 
 
 @dataclass

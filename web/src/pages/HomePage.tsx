@@ -2,8 +2,11 @@ import { useEffect, useState } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import Button from '@mui/material/Button'
 import Container from '@mui/material/Container'
+import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 import { apiFetch } from '../api/authClient'
+import ThemeToggle from '../components/ThemeToggle'
+import { useThemeMode } from '../theme/ThemeModeContext'
 
 type Status =
   | { kind: 'loading' }
@@ -13,13 +16,15 @@ type Status =
 // Bare authenticated placeholder — Epic 2 (Story 2.2) builds the real
 // Dashboard. This exists only to prove the session/route-guard works
 // (AC #3), gated behind whether GET /auth/me succeeds. The "Log out"
-// button below is a provisional placement (Story 1.4) — EXPERIENCE.md's
-// eventual home for it is an avatar-menu/Settings screen that Story 1.6's
-// nav shell doesn't exist yet to host.
+// button and `ThemeToggle` below are both provisional placements (Stories
+// 1.4 and 1.6) — EXPERIENCE.md's eventual home for both is an
+// avatar-menu/Settings screen that Story 1.6's nav shell doesn't exist yet
+// to host.
 function HomePage() {
   const [status, setStatus] = useState<Status>({ kind: 'loading' })
   const [submitting, setSubmitting] = useState(false)
   const navigate = useNavigate()
+  const { resetPreference } = useThemeMode()
 
   useEffect(() => {
     let cancelled = false
@@ -53,6 +58,9 @@ function HomePage() {
     try {
       const response = await apiFetch('/auth/logout', { method: 'POST' })
       if (response.ok) {
+        // An unauthenticated visitor always sees system preference (AC #6) —
+        // don't let this account's override linger for the next visitor.
+        resetPreference()
         navigate('/', { replace: true })
       }
     } catch {
@@ -77,9 +85,12 @@ function HomePage() {
       <Typography variant="h4" component="h1" gutterBottom>
         Logged in
       </Typography>
-      <Button variant="outlined" disabled={submitting} onClick={handleLogout}>
-        Log out
-      </Button>
+      <Stack direction="row" spacing={2} sx={{ alignItems: 'center' }}>
+        <Button variant="outlined" disabled={submitting} onClick={handleLogout}>
+          Log out
+        </Button>
+        <ThemeToggle />
+      </Stack>
     </Container>
   )
 }

@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 
 from adapters.persistence.database import create_session_factory
 from adapters.persistence.users import SqlAlchemyUserRepository
-from domain.models import Role, UserStatus
+from domain.models import Role, ThemePreference, UserStatus
 
 
 async def _count_active_administrators() -> int:
@@ -111,3 +111,25 @@ async def test_update_password_persists_the_new_hash_and_increments_version(seed
 
     assert updated.hashed_password == "a-new-hash"
     assert updated.version == user.version + 1
+
+
+async def test_new_user_defaults_to_system_theme_preference(seed_user):
+    user, _ = await seed_user(username="admin")
+
+    assert user.theme_preference == ThemePreference.SYSTEM
+
+
+async def test_update_theme_preference_persists_the_new_value(seed_user):
+    user, _ = await seed_user(username="admin")
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyUserRepository(session).update_theme_preference(
+            user.id, ThemePreference.DARK.value
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        updated = await SqlAlchemyUserRepository(session).get_by_id(user.id)
+
+    assert updated.theme_preference == ThemePreference.DARK

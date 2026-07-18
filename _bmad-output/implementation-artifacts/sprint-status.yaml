@@ -55,7 +55,7 @@ development_status:
   1-3-role-scoped-portal-access-last-admin-guard: done
   1-4-session-invalidation-logout-revocation: done
   1-5-login-lockout-password-reset: done
-  1-6-design-system-foundation-shared-interaction-patterns: backlog
+  1-6-design-system-foundation-shared-interaction-patterns: done
   epic-1-retrospective: optional
 
   epic-2: backlog

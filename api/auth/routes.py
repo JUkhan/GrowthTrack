@@ -6,7 +6,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import replace
 from datetime import timedelta
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel, Field
@@ -27,8 +29,9 @@ from api.auth.tokens import create_access_token
 from config import Settings, get_settings
 from domain.auth import AccountLocked, AuthenticationService, InvalidCredentials
 from domain.bootstrap import BootstrapAlreadyComplete, BootstrapService
-from domain.models import User
+from domain.models import ThemePreference, User
 from domain.password_reset import InvalidResetToken, PasswordResetService
+from domain.preferences import UserPreferenceService
 from domain.sessions import SessionService
 from ports.auth import PwdlibPasswordHasher
 
@@ -53,6 +56,7 @@ class UserResponse(BaseModel):
     id: uuid.UUID
     username: str
     role: str
+    theme_preference: str
 
 
 class BootstrapStatusResponse(BaseModel):
@@ -70,6 +74,10 @@ class ForgotPasswordRequest(BaseModel):
 class ResetPasswordRequest(BaseModel):
     token: str = Field(min_length=1, max_length=512)
     new_password: str = Field(min_length=1, max_length=72)
+
+
+class UpdateThemePreferenceRequest(BaseModel):
+    theme_preference: Literal["light", "dark", "system"]
 
 
 def _invalid_credentials() -> HTTPException:
@@ -173,13 +181,41 @@ async def login(
     await session.commit()
     _set_session_cookie(response, token, settings)
 
-    return UserResponse(id=user.id, username=user.username, role=user.role.value)
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        role=user.role.value,
+        theme_preference=user.theme_preference.value,
+    )
 
 
 @router.get("/me", response_model=UserResponse)
 async def me(current_user: User = Depends(get_current_user)) -> UserResponse:
     return UserResponse(
-        id=current_user.id, username=current_user.username, role=current_user.role.value
+        id=current_user.id,
+        username=current_user.username,
+        role=current_user.role.value,
+        theme_preference=current_user.theme_preference.value,
+    )
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_theme_preference(
+    body: UpdateThemePreferenceRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> UserResponse:
+    users = SqlAlchemyUserRepository(session)
+    service = UserPreferenceService(users)
+    theme_preference = ThemePreference(body.theme_preference)
+    await service.update_theme_preference(current_user.id, theme_preference)
+    await session.commit()
+    updated = replace(current_user, theme_preference=theme_preference)
+    return UserResponse(
+        id=updated.id,
+        username=updated.username,
+        role=updated.role.value,
+        theme_preference=updated.theme_preference.value,
     )
 
 
@@ -240,7 +276,12 @@ async def bootstrap(
     await session.commit()
     _set_session_cookie(response, token, settings)
 
-    return UserResponse(id=user.id, username=user.username, role=user.role.value)
+    return UserResponse(
+        id=user.id,
+        username=user.username,
+        role=user.role.value,
+        theme_preference=user.theme_preference.value,
+    )
 
 
 @router.post("/forgot-password", response_model=MessageResponse)

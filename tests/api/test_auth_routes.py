@@ -70,7 +70,12 @@ async def test_valid_login_returns_200_sets_cookie_and_audits_success(client, se
 
     assert response.status_code == 200
     body = response.json()
-    assert body == {"id": str(user.id), "username": "admin", "role": "administrator"}
+    assert body == {
+        "id": str(user.id),
+        "username": "admin",
+        "role": "administrator",
+        "theme_preference": "system",
+    }
     assert ACCESS_TOKEN_COOKIE in response.cookies
 
     rows = await _audit_rows()
@@ -225,7 +230,12 @@ async def test_me_with_valid_cookie_returns_200(client, seed_user):
     response = await client.get("/auth/me")
 
     assert response.status_code == 200
-    assert response.json() == {"id": str(user.id), "username": "admin", "role": "administrator"}
+    assert response.json() == {
+        "id": str(user.id),
+        "username": "admin",
+        "role": "administrator",
+        "theme_preference": "system",
+    }
 
 
 async def test_me_with_expired_token_returns_401(client, seed_user):
@@ -263,6 +273,40 @@ async def test_me_with_a_valid_token_for_a_non_administrator_returns_401(client,
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_patch_me_without_cookie_returns_401(client):
+    response = await client.patch("/auth/me", json={"theme_preference": "dark"})
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_patch_me_updates_and_returns_the_new_theme_preference(client, seed_user):
+    user, password = await seed_user(username="admin")
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    response = await client.patch("/auth/me", json={"theme_preference": "dark"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "id": str(user.id),
+        "username": "admin",
+        "role": "administrator",
+        "theme_preference": "dark",
+    }
+
+    follow_up = await client.get("/auth/me")
+    assert follow_up.json()["theme_preference"] == "dark"
+
+
+async def test_patch_me_rejects_an_invalid_theme_preference_with_422(client, seed_user):
+    _, password = await seed_user(username="admin")
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    response = await client.patch("/auth/me", json={"theme_preference": "purple"})
+
+    assert response.status_code == 422
 
 
 async def test_logout_returns_204_and_clears_the_cookie(client, seed_user):

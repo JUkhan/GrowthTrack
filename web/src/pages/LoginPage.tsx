@@ -7,6 +7,7 @@ import Link from '@mui/material/Link'
 import TextField from '@mui/material/TextField'
 import { apiFetch } from '../api/authClient'
 import AuthFormShell from '../components/AuthFormShell'
+import { useThemeMode } from '../theme/ThemeModeContext'
 import BootstrapForm from './BootstrapForm'
 
 interface LocationState {
@@ -22,6 +23,7 @@ function LoginPage() {
   const [bootstrapRequired, setBootstrapRequired] = useState<boolean | null>(null)
   const navigate = useNavigate()
   const location = useLocation()
+  const { syncPreference } = useThemeMode()
   const [deactivationMessage, setDeactivationMessage] = useState<string | null>(null)
   const [deactivationSeverity, setDeactivationSeverity] = useState<'warning' | 'success'>(
     'warning',
@@ -99,6 +101,11 @@ function LoginPage() {
         }
         return
       }
+
+      // The saved preference is already in this response — apply it now
+      // rather than waiting on ThemeModeContext's next fetch or a reload.
+      const body = await response.json().catch(() => null)
+      syncPreference(body?.theme_preference)
 
       navigate('/home')
     } catch {

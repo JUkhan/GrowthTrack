@@ -3,6 +3,8 @@ import userEvent from '@testing-library/user-event'
 import { createMemoryRouter, RouterProvider } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import LoginPage from './LoginPage'
+import { ThemeModeProvider } from '../theme/ThemeModeContext'
+import { ThemePreferenceProbe } from '../testUtils/ThemePreferenceProbe'
 
 function renderLoginPage(state?: { message: string }) {
   const router = createMemoryRouter(
@@ -12,7 +14,12 @@ function renderLoginPage(state?: { message: string }) {
     ],
     { initialEntries: [state ? { pathname: '/', state } : '/'] },
   )
-  render(<RouterProvider router={router} />)
+  render(
+    <ThemeModeProvider>
+      <ThemePreferenceProbe />
+      <RouterProvider router={router} />
+    </ThemeModeProvider>,
+  )
 }
 
 async function submitForm(username: string, password: string) {
@@ -191,5 +198,44 @@ describe('LoginPage', () => {
       'href',
       '/forgot-password',
     )
+  })
+
+  it('syncs the theme preference from the login response immediately, without a reload', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url === '/auth/bootstrap-status') {
+          return Promise.resolve(
+            new Response(JSON.stringify({ bootstrap_required: false }), { status: 200 }),
+          )
+        }
+        if (url === '/auth/login' && init?.method === 'POST') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                id: '1',
+                username: 'admin',
+                role: 'administrator',
+                theme_preference: 'dark',
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        // ThemeModeProvider's own mount-time /auth/me — unauthenticated, pre-login.
+        return Promise.resolve(new Response(null, { status: 401 }))
+      }),
+    )
+
+    renderLoginPage()
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+    expect(screen.getByTestId('theme-preference')).toHaveTextContent('system')
+
+    await submitForm('admin', 'correct-horse-battery-staple')
+
+    await waitFor(() => {
+      expect(screen.getByTestId('theme-preference')).toHaveTextContent('dark')
+    })
   })
 })

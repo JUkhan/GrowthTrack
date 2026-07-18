@@ -1,17 +1,27 @@
 import CssBaseline from '@mui/material/CssBaseline'
-import { ThemeProvider, createTheme } from '@mui/material/styles'
+import { ThemeProvider } from '@mui/material/styles'
 import { RouterProvider } from 'react-router-dom'
 import { router } from './router'
+import { createAppTheme } from './theme/createAppTheme'
+import { ThemeModeProvider, useThemeMode } from './theme/ThemeModeContext'
 
-// App shell only — Story 1.6 applies GrowthTrack's design tokens to this theme.
-const theme = createTheme()
+function ThemedApp() {
+  const { mode } = useThemeMode()
+  const theme = createAppTheme(mode)
 
-function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline />
       <RouterProvider router={router} />
     </ThemeProvider>
+  )
+}
+
+function App() {
+  return (
+    <ThemeModeProvider>
+      <ThemedApp />
+    </ThemeModeProvider>
   )
 }
 

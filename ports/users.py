@@ -45,3 +45,6 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def update_password(self, user_id: uuid.UUID, hashed_password: str) -> None: ...
+
+    @abstractmethod
+    async def update_theme_preference(self, user_id: uuid.UUID, theme_preference: str) -> None: ...
