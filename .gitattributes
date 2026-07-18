@@ -1,0 +1,3 @@
+# Shell scripts run inside Linux containers (bind-mounted or COPYed as-is) —
+# CRLF from a Windows checkout breaks their shebang/`set` line at runtime.
+*.sh text eol=lf
