@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 
@@ -32,3 +33,15 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def acquire_bootstrap_lock(self) -> None: ...
+
+    @abstractmethod
+    async def increment_failed_login_count(self, user_id: uuid.UUID) -> int: ...
+
+    @abstractmethod
+    async def lock_until(self, user_id: uuid.UUID, until: datetime) -> None: ...
+
+    @abstractmethod
+    async def clear_lockout(self, user_id: uuid.UUID) -> None: ...
+
+    @abstractmethod
+    async def update_password(self, user_id: uuid.UUID, hashed_password: str) -> None: ...

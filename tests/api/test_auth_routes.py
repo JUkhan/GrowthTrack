@@ -1,14 +1,20 @@
+import hashlib
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import jwt
 from sqlalchemy import text
 
+from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
 from adapters.persistence.database import create_engine, create_session_factory
-from adapters.persistence.users import UserModel
+from adapters.persistence.password_reset import SqlAlchemyPasswordResetTokenRepository
+from adapters.persistence.users import SqlAlchemyUserRepository, UserModel
 from api.auth.dependencies import ACCESS_TOKEN_COOKIE
 from api.auth.tokens import ALGORITHM, create_access_token
 from config import get_settings
-from domain.models import Role, UserStatus
+from domain.models import PasswordResetToken, Role, UserStatus
+from domain.password_reset import PasswordResetService
+from ports.auth import PwdlibPasswordHasher
 
 
 async def _audit_rows() -> list[dict]:
@@ -18,6 +24,43 @@ async def _audit_rows() -> list[dict]:
             text("SELECT actor_user_id, action, details FROM audit_log_entries ORDER BY created_at")
         )
         return [dict(row._mapping) for row in result]
+
+
+async def _issue_reset_token(username: str) -> str:
+    """Hand-crafts a reset token via the domain service directly — same
+    precedent as this file's JWT-crafting helpers below (test_me_with_*) —
+    since the HTTP layer deliberately never returns the raw token."""
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        users = SqlAlchemyUserRepository(session)
+        reset_tokens = SqlAlchemyPasswordResetTokenRepository(session)
+        audit_log = SqlAlchemyAuditLogRepository(session)
+        service = PasswordResetService(
+            users, reset_tokens, PwdlibPasswordHasher(), audit_log, timedelta(minutes=60)
+        )
+        raw_token = await service.request_reset(username)
+        await session.commit()
+    assert raw_token is not None
+    return raw_token
+
+
+async def _issue_expired_reset_token(username: str) -> str:
+    session_factory = create_session_factory()
+    raw_token = "an-already-expired-raw-token"
+    async with session_factory() as session:
+        user = await SqlAlchemyUserRepository(session).get_by_username(username)
+        await SqlAlchemyPasswordResetTokenRepository(session).add(
+            PasswordResetToken(
+                id=uuid.uuid4(),
+                user_id=user.id,
+                token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                expires_at=datetime.now(UTC) - timedelta(minutes=1),
+                used_at=None,
+                created_at=datetime.now(UTC) - timedelta(hours=2),
+            )
+        )
+        await session.commit()
+    return raw_token
 
 
 async def test_valid_login_returns_200_sets_cookie_and_audits_success(client, seed_user):
@@ -306,3 +349,150 @@ async def test_deactivated_administrator_with_a_still_valid_token_is_rejected_wi
         body["error"]["message"]
         == "Your account has been deactivated. Contact an administrator."
     )
+
+
+async def test_login_locks_after_five_failed_attempts(client, seed_user):
+    _, password = await seed_user(username="admin")
+
+    for _ in range(5):
+        response = await client.post(
+            "/auth/login", json={"username": "admin", "password": "wrong-password"}
+        )
+        assert response.status_code == 401
+        assert response.json()["error"]["code"] == "invalid_credentials"
+
+    # The 6th attempt is rejected as locked even with the correct password.
+    response = await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    assert response.status_code == 401
+    body = response.json()
+    assert body["error"]["code"] == "account_locked"
+    settings = get_settings()
+    retry_after = body["error"]["details"]["retry_after_seconds"]
+    assert 0 < retry_after <= settings.login_lockout_duration_minutes * 60
+
+
+async def test_locked_account_audit_trail(client, seed_user):
+    user, password = await seed_user(username="admin")
+
+    for _ in range(5):
+        await client.post("/auth/login", json={"username": "admin", "password": "wrong-password"})
+    await client.post("/auth/login", json={"username": "admin", "password": password})
+
+    rows = await _audit_rows()
+    locked_rows = [r for r in rows if r["action"] == "account.locked"]
+    assert len(locked_rows) == 1
+    assert locked_rows[0]["actor_user_id"] == user.id
+
+    failure_rows = [r for r in rows if r["action"] == "login.failure"]
+    assert failure_rows[-1]["details"]["reason"] == "locked"
+
+
+async def test_successful_login_clears_a_prior_lockout(client, seed_user):
+    user, password = await seed_user(username="admin")
+
+    for _ in range(4):
+        response = await client.post(
+            "/auth/login", json={"username": "admin", "password": "wrong-password"}
+        )
+        assert response.status_code == 401
+
+    response = await client.post("/auth/login", json={"username": "admin", "password": password})
+    assert response.status_code == 200
+
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        db_user = await session.get(UserModel, user.id)
+    assert db_user.failed_login_count == 0
+    assert db_user.locked_until is None
+
+
+async def test_forgot_password_returns_the_same_response_regardless_of_account_state(
+    client, seed_user
+):
+    await seed_user(username="admin")
+    await seed_user(username="sales", role=Role.SALES_USER)
+    await seed_user(username="inactive-admin", status=UserStatus.INACTIVE)
+
+    responses = []
+    for username in ("admin", "a-username-that-does-not-exist", "sales", "inactive-admin"):
+        response = await client.post("/auth/forgot-password", json={"username": username})
+        responses.append((response.status_code, response.json()))
+
+    first = responses[0]
+    assert first[0] == 200
+    for response in responses[1:]:
+        assert response == first
+
+
+async def test_reset_password_happy_path(client, seed_user):
+    _, old_password = await seed_user(username="admin")
+    raw_token = await _issue_reset_token("admin")
+
+    response = await client.post(
+        "/auth/reset-password",
+        json={"token": raw_token, "new_password": "brand-new-password-1"},
+    )
+    assert response.status_code == 204
+
+    new_password_login = await client.post(
+        "/auth/login", json={"username": "admin", "password": "brand-new-password-1"}
+    )
+    assert new_password_login.status_code == 200
+
+    old_password_login = await client.post(
+        "/auth/login", json={"username": "admin", "password": old_password}
+    )
+    assert old_password_login.status_code == 401
+
+
+async def test_reset_password_rejects_expired_used_or_unknown_token_identically(
+    client, seed_user
+):
+    await seed_user(username="admin")
+
+    unknown_response = await client.post(
+        "/auth/reset-password", json={"token": "never-issued", "new_password": "whatever-1"}
+    )
+
+    used_raw_token = await _issue_reset_token("admin")
+    await client.post(
+        "/auth/reset-password", json={"token": used_raw_token, "new_password": "whatever-2"}
+    )
+    used_response = await client.post(
+        "/auth/reset-password", json={"token": used_raw_token, "new_password": "whatever-3"}
+    )
+
+    expired_raw_token = await _issue_expired_reset_token("admin")
+    expired_response = await client.post(
+        "/auth/reset-password", json={"token": expired_raw_token, "new_password": "whatever-4"}
+    )
+
+    for response in (unknown_response, used_response, expired_response):
+        assert response.status_code == 400
+        assert response.json() == {
+            "error": {
+                "code": "invalid_reset_token",
+                "message": "This reset link is invalid or has expired.",
+                "details": None,
+            }
+        }
+
+
+async def test_reset_password_clears_a_lockout(client, seed_user):
+    await seed_user(username="admin")
+
+    for _ in range(5):
+        await client.post("/auth/login", json={"username": "admin", "password": "wrong-password"})
+
+    raw_token = await _issue_reset_token("admin")
+    reset_response = await client.post(
+        "/auth/reset-password",
+        json={"token": raw_token, "new_password": "brand-new-password-2"},
+    )
+    assert reset_response.status_code == 204
+
+    login_response = await client.post(
+        "/auth/login", json={"username": "admin", "password": "brand-new-password-2"}
+    )
+    assert login_response.status_code == 200

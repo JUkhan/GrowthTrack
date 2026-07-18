@@ -3,6 +3,8 @@
 Run with: ``uvicorn api.main:app``
 """
 
+import logging
+
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
@@ -11,6 +13,8 @@ from fastapi.responses import JSONResponse
 
 from api.auth.routes import router as auth_router
 from api.routes.health import router as health_router
+
+logging.basicConfig(level=logging.INFO)
 
 app = FastAPI(title="GrowthTrack API")
 

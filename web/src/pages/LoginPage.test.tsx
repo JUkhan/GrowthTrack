@@ -22,6 +22,19 @@ async function submitForm(username: string, password: string) {
   await user.click(screen.getByRole('button', { name: 'Log in' }))
 }
 
+function accountLockedResponse(retryAfterSeconds: number) {
+  return new Response(
+    JSON.stringify({
+      error: {
+        code: 'account_locked',
+        message: 'Too many failed login attempts. Try again later.',
+        details: { retry_after_seconds: retryAfterSeconds },
+      },
+    }),
+    { status: 401 },
+  )
+}
+
 function stubFetch(loginResponse: () => Response, bootstrapRequired = false) {
   vi.stubGlobal(
     'fetch',
@@ -134,5 +147,49 @@ describe('LoginPage', () => {
     await screen.findByRole('heading', { name: 'GrowthTrack' })
 
     expect(screen.queryByRole('alert')).not.toBeInTheDocument()
+  })
+
+  it('shows the lockout cooldown alert and disables the submit button on an account_locked response', async () => {
+    stubFetch(() => accountLockedResponse(42))
+
+    renderLoginPage()
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+    await submitForm('admin', 'wrong-password')
+
+    expect(
+      await screen.findByText('Too many failed attempts. Try again in 42s.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Log in' })).toBeDisabled()
+  })
+
+  it('counts down the displayed lockout timer after each second', async () => {
+    stubFetch(() => accountLockedResponse(3))
+
+    renderLoginPage()
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+    await submitForm('admin', 'wrong-password')
+
+    expect(await screen.findByText('Too many failed attempts. Try again in 3s.')).toBeInTheDocument()
+
+    await waitFor(
+      () => {
+        expect(
+          screen.getByText('Too many failed attempts. Try again in 2s.'),
+        ).toBeInTheDocument()
+      },
+      { timeout: 2000 },
+    )
+  })
+
+  it('has a link to the forgot-password page', async () => {
+    stubFetch(() => new Response(null, { status: 200 }))
+
+    renderLoginPage()
+    await screen.findByRole('heading', { name: 'GrowthTrack' })
+
+    expect(screen.getByRole('link', { name: 'Forgot password?' })).toHaveAttribute(
+      'href',
+      '/forgot-password',
+    )
   })
 })

@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     # immediately-deleted cookie, breaking login with no obvious cause.
     jwt_expiry_minutes: int = Field(default=480, gt=0)
 
+    # OWASP-validated defaults (Blocking Brute Force Attacks / Authentication
+    # Cheat Sheet): 3-10 attempts and ~15-20 minute lockouts are both typical.
+    login_lockout_threshold: int = Field(default=5, gt=0)
+    login_lockout_duration_minutes: int = Field(default=15, gt=0)
+    # OWASP Forgot Password Cheat Sheet: reset tokens should expire within
+    # roughly 15-60 minutes.
+    password_reset_token_ttl_minutes: int = Field(default=60, gt=0)
+
     twilio_account_sid: str
     twilio_auth_token: str
     twilio_whatsapp_number: str

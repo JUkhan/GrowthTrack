@@ -1,14 +1,18 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { Link as RouterLink, useLocation, useNavigate } from 'react-router-dom'
 import Alert from '@mui/material/Alert'
-import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import Container from '@mui/material/Container'
+import Link from '@mui/material/Link'
 import TextField from '@mui/material/TextField'
-import Typography from '@mui/material/Typography'
 import { apiFetch } from '../api/authClient'
+import AuthFormShell from '../components/AuthFormShell'
 import BootstrapForm from './BootstrapForm'
+
+interface LocationState {
+  message?: string
+  severity?: 'warning' | 'success'
+}
 
 function LoginPage() {
   const [username, setUsername] = useState('')
@@ -19,17 +23,37 @@ function LoginPage() {
   const navigate = useNavigate()
   const location = useLocation()
   const [deactivationMessage, setDeactivationMessage] = useState<string | null>(null)
+  const [deactivationSeverity, setDeactivationSeverity] = useState<'warning' | 'success'>(
+    'warning',
+  )
+  const [lockoutSeconds, setLockoutSeconds] = useState<number | null>(null)
 
   useEffect(() => {
-    const message = (location.state as { message?: string } | null)?.message
-    if (message) {
-      setDeactivationMessage(message)
+    const state = location.state as LocationState | null
+    if (state?.message) {
+      setDeactivationMessage(state.message)
+      setDeactivationSeverity(state.severity ?? 'warning')
       // Consume the router-state message once so a later back-navigation
       // to this same history entry doesn't re-show a stale notice.
       navigate(location.pathname, { replace: true, state: null })
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  useEffect(() => {
+    if (!lockoutSeconds || lockoutSeconds <= 0) {
+      return
+    }
+    const interval = setInterval(() => {
+      setLockoutSeconds((current) => {
+        if (current === null || current <= 1) {
+          return null
+        }
+        return current - 1
+      })
+    }, 1000)
+    return () => clearInterval(interval)
+  }, [lockoutSeconds])
 
   useEffect(() => {
     let cancelled = false
@@ -68,7 +92,11 @@ function LoginPage() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
-        setError(body?.error?.message ?? 'Invalid username or password')
+        if (body?.error?.code === 'account_locked') {
+          setLockoutSeconds(body.error.details?.retry_after_seconds ?? null)
+        } else {
+          setError(body?.error?.message ?? 'Invalid username or password')
+        }
         return
       }
 
@@ -89,37 +117,42 @@ function LoginPage() {
   }
 
   return (
-    <Container maxWidth="xs" sx={{ py: 8 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        GrowthTrack
-      </Typography>
-      <Box
-        component="form"
-        onSubmit={handleSubmit}
-        noValidate
-        sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
+    <AuthFormShell heading="GrowthTrack" onSubmit={handleSubmit}>
+      {deactivationMessage && (
+        <Alert severity={deactivationSeverity}>{deactivationMessage}</Alert>
+      )}
+      {lockoutSeconds !== null ? (
+        <Alert severity="warning">
+          Too many failed attempts. Try again in {lockoutSeconds}s.
+        </Alert>
+      ) : (
+        error && <Alert severity="error">{error}</Alert>
+      )}
+      <TextField
+        label="Username"
+        value={username}
+        onChange={(event) => setUsername(event.target.value)}
+        autoFocus
+        required
+      />
+      <TextField
+        label="Password"
+        type="password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        required
+      />
+      <Button
+        type="submit"
+        variant="contained"
+        disabled={submitting || lockoutSeconds !== null}
       >
-        {deactivationMessage && <Alert severity="warning">{deactivationMessage}</Alert>}
-        {error && <Alert severity="error">{error}</Alert>}
-        <TextField
-          label="Username"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          autoFocus
-          required
-        />
-        <TextField
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-        />
-        <Button type="submit" variant="contained" disabled={submitting}>
-          Log in
-        </Button>
-      </Box>
-    </Container>
+        Log in
+      </Button>
+      <Link component={RouterLink} to="/forgot-password">
+        Forgot password?
+      </Link>
+    </AuthFormShell>
   )
 }
 

@@ -32,6 +32,18 @@ class User:
     status: UserStatus
     version: int
     created_at: datetime
+    failed_login_count: int = 0
+    locked_until: datetime | None = None
+
+
+@dataclass
+class PasswordResetToken:
+    id: uuid.UUID
+    user_id: uuid.UUID
+    token_hash: str
+    expires_at: datetime
+    used_at: datetime | None
+    created_at: datetime
 
 
 @dataclass

@@ -20,7 +20,10 @@ async def _clean_tables() -> AsyncIterator[None]:
     async with engine.begin() as conn:
         # DELETE, not TRUNCATE: the runtime app role (AD-5's least-privilege
         # split) has DML grants only, no TRUNCATE/DDL rights.
+        # password_reset_tokens.user_id carries a ForeignKey("users.id"), so
+        # it must be deleted before users or the FK constraint rejects the delete.
         await conn.execute(text("DELETE FROM audit_log_entries"))
+        await conn.execute(text("DELETE FROM password_reset_tokens"))
         await conn.execute(text("DELETE FROM users"))
         await conn.execute(text("DELETE FROM revoked_tokens"))
     yield

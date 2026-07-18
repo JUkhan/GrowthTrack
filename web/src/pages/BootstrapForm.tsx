@@ -2,13 +2,11 @@ import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Alert from '@mui/material/Alert'
-import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
-import Container from '@mui/material/Container'
 import Link from '@mui/material/Link'
 import TextField from '@mui/material/TextField'
-import Typography from '@mui/material/Typography'
 import { apiFetch } from '../api/authClient'
+import AuthFormShell from '../components/AuthFormShell'
 
 interface BootstrapFormProps {
   onAdministratorExists: () => void
@@ -50,48 +48,38 @@ function BootstrapForm({ onAdministratorExists }: BootstrapFormProps) {
   }
 
   return (
-    <Container maxWidth="xs" sx={{ py: 8 }}>
-      <Typography variant="h4" component="h1" gutterBottom>
-        Create the first Administrator account
-      </Typography>
-      <Box
-        component="form"
-        onSubmit={handleSubmit}
-        noValidate
-        sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}
-      >
-        {error && (
-          <Alert severity="error">
-            {error}
-            {administratorExists && (
-              <>
-                {' '}
-                <Link component="button" type="button" onClick={onAdministratorExists}>
-                  Back to login
-                </Link>
-              </>
-            )}
-          </Alert>
-        )}
-        <TextField
-          label="Username"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          autoFocus
-          required
-        />
-        <TextField
-          label="Password"
-          type="password"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-        />
-        <Button type="submit" variant="contained" disabled={submitting}>
-          Create account
-        </Button>
-      </Box>
-    </Container>
+    <AuthFormShell heading="Create the first Administrator account" onSubmit={handleSubmit}>
+      {error && (
+        <Alert severity="error">
+          {error}
+          {administratorExists && (
+            <>
+              {' '}
+              <Link component="button" type="button" onClick={onAdministratorExists}>
+                Back to login
+              </Link>
+            </>
+          )}
+        </Alert>
+      )}
+      <TextField
+        label="Username"
+        value={username}
+        onChange={(event) => setUsername(event.target.value)}
+        autoFocus
+        required
+      />
+      <TextField
+        label="Password"
+        type="password"
+        value={password}
+        onChange={(event) => setPassword(event.target.value)}
+        required
+      />
+      <Button type="submit" variant="contained" disabled={submitting}>
+        Create account
+      </Button>
+    </AuthFormShell>
   )
 }
 

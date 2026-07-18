@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, select, text
+from sqlalchemy import DateTime, Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,6 +25,8 @@ class UserModel(Base):
     status: Mapped[str] = mapped_column(String, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
 
 def _to_domain(row: UserModel) -> User:
@@ -36,6 +38,8 @@ def _to_domain(row: UserModel) -> User:
         status=UserStatus(row.status),
         version=row.version,
         created_at=row.created_at,
+        failed_login_count=row.failed_login_count,
+        locked_until=row.locked_until,
     )
 
 
@@ -85,3 +89,36 @@ class SqlAlchemyUserRepository(UserRepository):
         # serialization (Story 1.2) — do not reuse this key elsewhere.
         # Transaction-scoped: releases automatically on commit/rollback.
         await self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 890217364})
+
+    async def increment_failed_login_count(self, user_id: uuid.UUID) -> int:
+        # Atomic UPDATE ... RETURNING, not read-then-write — two concurrent
+        # failed attempts must both land, or the count under-reports and
+        # delays lockout.
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(failed_login_count=UserModel.failed_login_count + 1)
+            .returning(UserModel.failed_login_count)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one()
+
+    async def lock_until(self, user_id: uuid.UUID, until: datetime) -> None:
+        stmt = update(UserModel).where(UserModel.id == user_id).values(locked_until=until)
+        await self._session.execute(stmt)
+
+    async def clear_lockout(self, user_id: uuid.UUID) -> None:
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(failed_login_count=0, locked_until=None)
+        )
+        await self._session.execute(stmt)
+
+    async def update_password(self, user_id: uuid.UUID, hashed_password: str) -> None:
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(hashed_password=hashed_password, version=UserModel.version + 1)
+        )
+        await self._session.execute(stmt)
