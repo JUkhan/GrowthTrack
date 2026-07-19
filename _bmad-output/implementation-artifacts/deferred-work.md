@@ -55,3 +55,7 @@
 ## Deferred from: code review of 2-3-brand-performance-analytics (2026-07-19)
 
 - **Exactly-0% growth renders with the green "up" badge/arrow** [web/src/components/BrandPerformanceSection.tsx] — Reason: `Number(entry.growth_pct) >= 0` treats exactly-zero growth as "up" (success/green), with no neutral state. Not specified anywhere in Story 2.3's ACs or the design docs — a design call for a future story.
+
+## Deferred from: code review of 2-4-prioritized-doctor-visit-list (2026-07-19)
+
+- **`list_all()` has no transactional/snapshot coordination with an in-progress `upsert_many()` ingestion batch** [adapters/persistence/doctors.py:80] — Reason: a concurrent read during a nightly ingestion run could observe a partially-updated snapshot. Pre-existing architectural pattern shared with `BrandPerformanceService`/`DashboardMetricsService` (same read-without-locking design across the codebase), not introduced by this diff. Revisit at the ingestion-locking level in a future story if Epic 4's Daily Report generation needs stronger consistency guarantees.

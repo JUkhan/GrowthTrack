@@ -85,3 +85,53 @@ async def test_upsert_many_dedupes_a_batch_with_two_rows_sharing_the_same_confli
     found = await _get_by_external_id("D1")
     assert found is not None
     assert found.name == "Dr. Smith Jr."
+
+
+async def _list_all() -> list[Doctor]:
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        return await SqlAlchemyDoctorRepository(session).list_all()
+
+
+async def test_list_all_returns_empty_list_when_table_is_empty():
+    found = await _list_all()
+
+    assert found == []
+
+
+async def test_list_all_returns_rows_ordered_by_territory_then_priority_ascending():
+    await _upsert(
+        [
+            Doctor(
+                id=uuid.uuid4(),
+                external_doctor_id="D3",
+                name="Dr. West Two",
+                territory="West",
+                priority=2,
+            ),
+            Doctor(
+                id=uuid.uuid4(),
+                external_doctor_id="D1",
+                name="Dr. East One",
+                territory="East",
+                priority=1,
+            ),
+            Doctor(
+                id=uuid.uuid4(),
+                external_doctor_id="D2",
+                name="Dr. West One",
+                territory="West",
+                priority=1,
+            ),
+        ]
+    )
+
+    found = await _list_all()
+
+    assert [row.external_doctor_id for row in found] == ["D1", "D2", "D3"]
+    assert all(isinstance(row.id, uuid.UUID) for row in found)
+    assert [(row.territory, row.priority) for row in found] == [
+        ("East", 1),
+        ("West", 1),
+        ("West", 2),
+    ]

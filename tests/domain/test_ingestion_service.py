@@ -102,6 +102,9 @@ class FakeDoctorRepository(DoctorRepository):
     async def upsert_many(self, rows: list) -> None:
         self.upserted.extend(rows)
 
+    async def list_all(self) -> list:
+        raise NotImplementedError
+
 
 class FakeImportRunRepository(ImportRunRepository):
     def __init__(self, lock_available: bool = True) -> None:

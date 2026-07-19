@@ -11,13 +11,24 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Integer, String
+from sqlalchemy import Integer, String, select
 from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from adapters.persistence.database import Base
+from domain.models import Doctor
 from ports.doctors import DoctorRepository
+
+
+def _to_domain(row: DoctorModel) -> Doctor:
+    return Doctor(
+        id=row.id,
+        external_doctor_id=row.external_doctor_id,
+        name=row.name,
+        territory=row.territory,
+        priority=row.priority,
+    )
 
 
 class DoctorModel(Base):
@@ -65,3 +76,8 @@ class SqlAlchemyDoctorRepository(DoctorRepository):
             },
         )
         await self._session.execute(stmt)
+
+    async def list_all(self) -> list[Any]:
+        stmt = select(DoctorModel).order_by(DoctorModel.territory.asc(), DoctorModel.priority.asc())
+        result = await self._session.execute(stmt)
+        return [_to_domain(row) for row in result.scalars().all()]

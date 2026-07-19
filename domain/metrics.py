@@ -12,8 +12,9 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from domain.models import BrandPerformance, SalesData
+from domain.models import BrandPerformance, Doctor, SalesData
 from ports.brand_performance import BrandPerformanceRepository
+from ports.doctors import DoctorRepository
 from ports.import_runs import ImportRunRepository
 from ports.sales_data import SalesDataRepository
 from ports.teams import TeamRepository
@@ -224,3 +225,45 @@ class BrandPerformanceService:
     async def get_summary(self) -> BrandPerformanceSummary:
         rows = await self._brand_performance.list_all()
         return _classify_brands(rows, self._top_n, self._low_performing_n, self._focus_n)
+
+
+@dataclass
+class DoctorEntry:
+    doctor_name: str
+    territory: str
+    target_priority: int
+
+
+def _rank_doctors_for_territory(rows: list[Doctor], territory: str) -> list[DoctorEntry]:
+    """[ASSUMPTION — ranking direction, not flagged as a blocking business
+    decision in epics.md Story 2.4 (unlike Story 2.3 AC #4's thresholds or
+    Story 2.2 AC #6's formula, which explicitly withhold `done` pending
+    stakeholder sign-off) — but genuinely undefined by any planning doc.
+    Neither prd.md's Glossary ("Target Priority — the ranking used to
+    order the Doctor visit list") nor entities.md's field list say
+    whether a LOWER Doctor.priority number means "visit first" or
+    "visit last". This function treats lower priority = higher
+    urgency = visit first (ascending sort), mirroring this exact
+    codebase's already-established `BrandPerformance.rank` convention
+    (Story 2.3: "ascending rank = better") for the same kind of
+    Source-System-ingested ordinal field. If a business stakeholder
+    later confirms the opposite direction, this is a one-function,
+    one-line change (flip to descending) — nothing else in this
+    story's design depends on the direction chosen.
+    """
+    normalized_territory = territory.strip().lower()
+    matching = [r for r in rows if r.territory.strip().lower() == normalized_territory]
+    ranked = sorted(matching, key=lambda r: (r.priority, r.name, r.external_doctor_id))
+    return [
+        DoctorEntry(doctor_name=r.name, territory=r.territory, target_priority=r.priority)
+        for r in ranked
+    ]
+
+
+class DoctorVisitListService:
+    def __init__(self, doctors: DoctorRepository) -> None:
+        self._doctors = doctors
+
+    async def get_visit_list(self, territory: str) -> list[DoctorEntry]:
+        rows = await self._doctors.list_all()
+        return _rank_doctors_for_territory(rows, territory)
