@@ -11,13 +11,25 @@ import uuid
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Integer, Numeric, String
+from sqlalchemy import Integer, Numeric, String, select
 from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from adapters.persistence.database import Base
+from domain.models import BrandPerformance
 from ports.brand_performance import BrandPerformanceRepository
+
+
+def _to_domain(row: BrandPerformanceModel) -> BrandPerformance:
+    return BrandPerformance(
+        id=row.id,
+        external_brand_id=row.external_brand_id,
+        brand_name=row.brand_name,
+        sales=row.sales,
+        rank=row.rank,
+        growth_pct=row.growth_pct,
+    )
 
 
 class BrandPerformanceModel(Base):
@@ -68,3 +80,8 @@ class SqlAlchemyBrandPerformanceRepository(BrandPerformanceRepository):
             },
         )
         await self._session.execute(stmt)
+
+    async def list_all(self) -> list[Any]:
+        stmt = select(BrandPerformanceModel).order_by(BrandPerformanceModel.rank.asc())
+        result = await self._session.execute(stmt)
+        return [_to_domain(row) for row in result.scalars().all()]

@@ -80,6 +80,54 @@ async def test_upsert_many_updates_an_existing_snapshot_row_on_conflict_not_igno
     assert found.growth_pct == Decimal("-1.5")
 
 
+async def _list_all() -> list[BrandPerformance]:
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        return await SqlAlchemyBrandPerformanceRepository(session).list_all()
+
+
+async def test_list_all_returns_empty_list_when_table_is_empty():
+    found = await _list_all()
+
+    assert found == []
+
+
+async def test_list_all_returns_rows_ordered_by_rank_ascending():
+    await _upsert(
+        [
+            BrandPerformance(
+                id=uuid.uuid4(),
+                external_brand_id="B3",
+                brand_name="Third",
+                sales=Decimal("1000"),
+                rank=3,
+                growth_pct=Decimal("1.0"),
+            ),
+            BrandPerformance(
+                id=uuid.uuid4(),
+                external_brand_id="B1",
+                brand_name="First",
+                sales=Decimal("5000"),
+                rank=1,
+                growth_pct=Decimal("2.0"),
+            ),
+            BrandPerformance(
+                id=uuid.uuid4(),
+                external_brand_id="B2",
+                brand_name="Second",
+                sales=Decimal("3000"),
+                rank=2,
+                growth_pct=Decimal("-1.5"),
+            ),
+        ]
+    )
+
+    found = await _list_all()
+
+    assert [row.external_brand_id for row in found] == ["B1", "B2", "B3"]
+    assert [row.rank for row in found] == [1, 2, 3]
+
+
 async def test_upsert_many_dedupes_a_batch_with_two_rows_sharing_the_same_conflict_key():
     """A single multi-row ON CONFLICT DO UPDATE statement raises if two input
     rows share a conflict key — this must not crash the whole run."""

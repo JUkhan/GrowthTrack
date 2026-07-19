@@ -80,6 +80,17 @@ class Settings(BaseSettings):
     # like AC #6's aggregation formula, just flagged for the record.
     dashboard_stale_after_hours: int = Field(default=24, gt=0)
 
+    # [ASSUMPTION — CONFIRM, epics.md Story 2.3 AC #4 / PRD §4.3 footnote]
+    # Neither the PRD nor epics.md define how many brands belong in each of
+    # Top/Low-Performing/Focus — a business decision, not an engineering
+    # call. 5/5/5 is this story's own placeholder default (see
+    # domain/metrics.py's _classify_brands docstring for the full
+    # reasoning). Must be confirmed by a business/product stakeholder
+    # before this story is marked done — not a silent default.
+    brand_top_n: int = Field(default=5, gt=0)
+    brand_low_performing_n: int = Field(default=5, gt=0)
+    brand_focus_n: int = Field(default=5, gt=0)
+
     @field_validator("source_system_import_dir")
     @classmethod
     def _source_system_import_dir_not_blank(cls, value: str) -> str:

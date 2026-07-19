@@ -10,12 +10,13 @@ from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from adapters.persistence.brand_performance import SqlAlchemyBrandPerformanceRepository
 from adapters.persistence.import_runs import SqlAlchemyImportRunRepository
 from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from api.auth.dependencies import get_current_user, get_db
 from config import get_settings
-from domain.metrics import DashboardMetricsService
+from domain.metrics import BrandEntry, BrandPerformanceService, DashboardMetricsService
 from domain.models import User
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -66,4 +67,49 @@ async def summary(
         ],
         data_as_of=result.data_as_of,
         is_stale=result.is_stale,
+    )
+
+
+class BrandEntryResponse(BaseModel):
+    external_brand_id: str
+    brand_name: str
+    sales: Decimal
+    rank: int
+    growth_pct: Decimal
+
+
+class BrandPerformanceResponse(BaseModel):
+    top_brands: list[BrandEntryResponse]
+    low_performing_brands: list[BrandEntryResponse]
+    focus_brands: list[BrandEntryResponse]
+
+
+@router.get("/brand-performance", response_model=BrandPerformanceResponse)
+async def brand_performance(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> BrandPerformanceResponse:
+    settings = get_settings()
+
+    service = BrandPerformanceService(
+        brand_performance=SqlAlchemyBrandPerformanceRepository(session),
+        top_n=settings.brand_top_n,
+        low_performing_n=settings.brand_low_performing_n,
+        focus_n=settings.brand_focus_n,
+    )
+    result = await service.get_summary()
+
+    def _to_response(entry: BrandEntry) -> BrandEntryResponse:
+        return BrandEntryResponse(
+            external_brand_id=entry.external_brand_id,
+            brand_name=entry.brand_name,
+            sales=entry.sales,
+            rank=entry.rank,
+            growth_pct=entry.growth_pct,
+        )
+
+    return BrandPerformanceResponse(
+        top_brands=[_to_response(e) for e in result.top_brands],
+        low_performing_brands=[_to_response(e) for e in result.low_performing_brands],
+        focus_brands=[_to_response(e) for e in result.focus_brands],
     )

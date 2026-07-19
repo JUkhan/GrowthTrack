@@ -12,6 +12,7 @@ export default defineConfig({
     proxy: {
       '/auth': 'http://localhost:8000',
       '/dashboard/summary': 'http://localhost:8000',
+      '/dashboard/brand-performance': 'http://localhost:8000',
     },
   },
   test: {

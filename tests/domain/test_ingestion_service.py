@@ -91,6 +91,9 @@ class FakeBrandPerformanceRepository(BrandPerformanceRepository):
     async def upsert_many(self, rows: list) -> None:
         self.upserted.extend(rows)
 
+    async def list_all(self) -> list:
+        raise NotImplementedError
+
 
 class FakeDoctorRepository(DoctorRepository):
     def __init__(self) -> None:

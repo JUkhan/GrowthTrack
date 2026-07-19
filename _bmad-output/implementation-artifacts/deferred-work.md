@@ -51,3 +51,7 @@
 
 - **Alembic migration sets `server_default="system"` but `UserModel.theme_preference` has no matching `server_default`, so model metadata and live schema disagree** [alembic/versions/d4d9c5b96249_user_theme_preference.py:32, adapters/persistence/users.py:30] — Reason: not a regression introduced by this story; the same convention (Python-side `default=` only, no `server_default`) is already used by `failed_login_count`/`locked_until` since Story 1.1/1.5. A future `alembic revision --autogenerate` may propose dropping the hand-added server default; worth fixing across all three columns together rather than one at a time.
 - **`_to_domain` calls `ThemePreference(row.theme_preference)` with no guard against an unrecognized DB value, which would raise an unhandled `ValueError`** [adapters/persistence/users.py:44] — Reason: extends the same unguarded pattern already deferred for `Role(row.role)`/`UserStatus(row.status)` in the 1-1 code review; only reachable via external DB corruption, no code path writes an invalid value today.
+
+## Deferred from: code review of 2-3-brand-performance-analytics (2026-07-19)
+
+- **Exactly-0% growth renders with the green "up" badge/arrow** [web/src/components/BrandPerformanceSection.tsx] — Reason: `Number(entry.growth_pct) >= 0` treats exactly-zero growth as "up" (success/green), with no neutral state. Not specified anywhere in Story 2.3's ACs or the design docs — a design call for a future story.

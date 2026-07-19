@@ -12,7 +12,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
-from domain.models import SalesData
+from domain.models import BrandPerformance, SalesData
+from ports.brand_performance import BrandPerformanceRepository
 from ports.import_runs import ImportRunRepository
 from ports.sales_data import SalesDataRepository
 from ports.teams import TeamRepository
@@ -119,3 +120,107 @@ class DashboardMetricsService:
             data_as_of=data_as_of,
             is_stale=is_stale,
         )
+
+
+@dataclass
+class BrandEntry:
+    external_brand_id: str
+    brand_name: str
+    sales: Decimal
+    rank: int
+    growth_pct: Decimal
+
+
+@dataclass
+class BrandPerformanceSummary:
+    top_brands: list[BrandEntry]
+    low_performing_brands: list[BrandEntry]
+    focus_brands: list[BrandEntry]
+
+
+def _classify_brands(
+    rows: list[BrandPerformance], top_n: int, low_performing_n: int, focus_n: int
+) -> BrandPerformanceSummary:
+    """[ASSUMPTION — CONFIRM, epics.md Story 2.3 AC #4 / PRD §4.3 footnote]
+    Neither source SRS defines what makes a brand "top," "low-performing,"
+    or "focus" — this is a business decision, not an engineering guess,
+    and epics.md explicitly says so. This function implements the most
+    defensible engineering default so Epic 2 isn't fully blocked and
+    Epic 4 has a working BrandPerformanceService to build on, but it MUST
+    be confirmed by a business/product stakeholder before this story is
+    marked done (AC #4) — do not describe this as "resolved" anywhere.
+
+    Two genuinely open sub-questions this default resolves, both flagged:
+    1. Threshold counts (top_n/low_performing_n/focus_n) — arbitrary
+       until confirmed; this story's default is 5/5/5 (config.py).
+    2. Whether the three lists are mutually exclusive. The PRD glossary
+       reads "classified as Top Brand, Low-Performing Brand, or Focus
+       Brand" (singular "or"), suggesting one classification per brand,
+       not three independently-computed lists that could overlap. This
+       function treats them as mutually exclusive for exactly that
+       reason: Top N (best `rank`) is selected first; Low-Performing N
+       is the worst-`rank` brands among what's LEFT after removing Top;
+       Focus N is the most-negative-`growth_pct` brands among what's
+       left after removing Top and Low-Performing. A brand already
+       ranked "Top" can never also show up as "Focus" — which would be
+       a confusing, self-contradicting Dashboard state.
+
+    "Focus Brand" specifically (the vaguest of the three, no PRD
+    definition at all) is read as "meaningfully declining but not
+    already the worst performer" (growth_pct < 0, among the
+    not-already-classified remainder) — distinct from Low-Performing
+    (already at the bottom of `rank`, possibly beyond an easy save) and
+    distinct from Top (already winning). This reading treats "Focus" as
+    an early-intervention signal, which is the only version of "needs a
+    push right now" that adds information beyond the other two lists.
+
+    `rank` here is the Source-System-ingested overall performance rank
+    (Story 2.1), not sales-recomputed — ascending rank = better.
+    """
+    if top_n < 0 or low_performing_n < 0 or focus_n < 0:
+        raise ValueError("top_n, low_performing_n, and focus_n must be >= 0")
+
+    by_rank = sorted(rows, key=lambda r: (r.rank, r.brand_name))
+    top = by_rank[:top_n]
+    top_ids = {r.external_brand_id for r in top}
+    remaining_after_top = [r for r in by_rank if r.external_brand_id not in top_ids]
+    low = sorted(remaining_after_top, key=lambda r: (-r.rank, r.brand_name))[:low_performing_n]
+    low_ids = {r.external_brand_id for r in low}
+    remaining_after_low = [r for r in remaining_after_top if r.external_brand_id not in low_ids]
+    focus = sorted(
+        (r for r in remaining_after_low if r.growth_pct < 0),
+        key=lambda r: (r.growth_pct, r.brand_name),
+    )[:focus_n]
+
+    def _to_entry(r: BrandPerformance) -> BrandEntry:
+        return BrandEntry(
+            external_brand_id=r.external_brand_id,
+            brand_name=r.brand_name,
+            sales=r.sales,
+            rank=r.rank,
+            growth_pct=r.growth_pct,
+        )
+
+    return BrandPerformanceSummary(
+        top_brands=[_to_entry(r) for r in top],
+        low_performing_brands=[_to_entry(r) for r in low],
+        focus_brands=[_to_entry(r) for r in focus],
+    )
+
+
+class BrandPerformanceService:
+    def __init__(
+        self,
+        brand_performance: BrandPerformanceRepository,
+        top_n: int,
+        low_performing_n: int,
+        focus_n: int,
+    ) -> None:
+        self._brand_performance = brand_performance
+        self._top_n = top_n
+        self._low_performing_n = low_performing_n
+        self._focus_n = focus_n
+
+    async def get_summary(self) -> BrandPerformanceSummary:
+        rows = await self._brand_performance.list_all()
+        return _classify_brands(rows, self._top_n, self._low_performing_n, self._focus_n)

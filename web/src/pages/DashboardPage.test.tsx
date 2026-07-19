@@ -52,6 +52,18 @@ function summaryBody(overrides: Record<string, unknown> = {}) {
   }
 }
 
+// Default empty-lists response for /dashboard/brand-performance — an
+// independent fetch from /dashboard/summary (Story 2.3). Every mock below
+// stubs it explicitly (rather than relying on a null-body 200 catch-all)
+// so it resolves deterministically to "loaded, empty" instead of an error
+// state that would collide with summary-fetch error/skeleton assertions.
+function brandPerformanceResponse(): Response {
+  return new Response(
+    JSON.stringify({ top_brands: [], low_performing_brands: [], focus_brands: [] }),
+    { status: 200 },
+  )
+}
+
 function stubFetch(summaryResponse: () => Response, meOk = true) {
   vi.stubGlobal(
     'fetch',
@@ -62,6 +74,9 @@ function stubFetch(summaryResponse: () => Response, meOk = true) {
       }
       if (url === '/dashboard/summary') {
         return Promise.resolve(summaryResponse())
+      }
+      if (url === '/dashboard/brand-performance') {
+        return Promise.resolve(brandPerformanceResponse())
       }
       return Promise.resolve(new Response(null, { status: 200 }))
     }),
@@ -96,6 +111,9 @@ describe('DashboardPage', () => {
         }
         if (url === '/dashboard/summary') {
           return pending
+        }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(brandPerformanceResponse())
         }
         return Promise.resolve(new Response(null, { status: 200 }))
       }),
@@ -212,6 +230,9 @@ describe('DashboardPage', () => {
           }
           return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
         }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(brandPerformanceResponse())
+        }
         return Promise.resolve(new Response(null, { status: 200 }))
       }),
     )
@@ -241,6 +262,9 @@ describe('DashboardPage', () => {
       }
       if (url === '/dashboard/summary') {
         return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+      }
+      if (url === '/dashboard/brand-performance') {
+        return Promise.resolve(brandPerformanceResponse())
       }
       return Promise.resolve(new Response(null, { status: 200 }))
     })
@@ -293,6 +317,9 @@ describe('DashboardPage', () => {
       if (url === '/dashboard/summary') {
         return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
       }
+      if (url === '/dashboard/brand-performance') {
+        return Promise.resolve(brandPerformanceResponse())
+      }
       return Promise.resolve(new Response(null, { status: 200 }))
     })
     vi.stubGlobal('fetch', fetchMock)
@@ -335,6 +362,9 @@ describe('DashboardPage', () => {
       }
       if (url === '/dashboard/summary') {
         return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+      }
+      if (url === '/dashboard/brand-performance') {
+        return Promise.resolve(brandPerformanceResponse())
       }
       return Promise.resolve(new Response(null, { status: 200 }))
     })
@@ -379,6 +409,9 @@ describe('DashboardPage', () => {
       }
       if (url === '/dashboard/summary') {
         return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+      }
+      if (url === '/dashboard/brand-performance') {
+        return Promise.resolve(brandPerformanceResponse())
       }
       return Promise.resolve(new Response(null, { status: 200 }))
     })
@@ -430,5 +463,77 @@ describe('DashboardPage', () => {
     expect(
       await screen.findByText('Your account has been deactivated. Contact an administrator.'),
     ).toBeInTheDocument()
+  })
+
+  it('renders the Brand Performance section below the seven-field grid once /dashboard/brand-performance resolves', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url === '/auth/me') {
+          return Promise.resolve(new Response(null, { status: 200 }))
+        }
+        if (url === '/dashboard/summary') {
+          return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+        }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                top_brands: [
+                  {
+                    external_brand_id: 'B1',
+                    brand_name: 'Acme',
+                    sales: '5000000.00',
+                    rank: 1,
+                    growth_pct: '2.00',
+                  },
+                ],
+                low_performing_brands: [],
+                focus_brands: [],
+              }),
+              { status: 200 },
+            ),
+          )
+        }
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }),
+    )
+
+    renderDashboardPage()
+
+    expect(await screen.findByText('Brand Performance')).toBeInTheDocument()
+    expect(await screen.findByText('Acme')).toBeInTheDocument()
+    expect(screen.getByText('Team Performance')).toBeInTheDocument() // seven-field grid still present
+  })
+
+  it('shows the Brand Performance section\'s own error state when /dashboard/brand-performance fails, without affecting the seven-field tiles', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url === '/auth/me') {
+          return Promise.resolve(new Response(null, { status: 200 }))
+        }
+        if (url === '/dashboard/summary') {
+          return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+        }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(new Response(null, { status: 500 }))
+        }
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }),
+    )
+
+    renderDashboardPage()
+
+    expect(
+      await screen.findByText("Couldn't load brand performance data. Please try again."),
+    ).toBeInTheDocument()
+    // The seven-field grid resolved successfully and is unaffected.
+    expect(await screen.findByText('North')).toBeInTheDocument()
+    expect(
+      screen.queryByText("Couldn't load dashboard data. Please try again."),
+    ).not.toBeInTheDocument()
   })
 })

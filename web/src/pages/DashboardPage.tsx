@@ -11,6 +11,8 @@ import AccessTimeIcon from '@mui/icons-material/AccessTime'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { apiFetch } from '../api/authClient'
+import BrandPerformanceSection from '../components/BrandPerformanceSection'
+import type { BrandPerformanceSummary } from '../components/BrandPerformanceSection'
 import StatTile from '../components/StatTile'
 import StatusBadge from '../components/StatusBadge'
 import ThemeToggle from '../components/ThemeToggle'
@@ -82,6 +84,9 @@ function DashboardPage() {
   const [summary, setSummary] = useState<DashboardSummary | null>(null)
   const [summaryError, setSummaryError] = useState(false)
   const [retryCount, setRetryCount] = useState(0)
+  const [brandPerformance, setBrandPerformance] = useState<BrandPerformanceSummary | null>(null)
+  const [brandPerformanceError, setBrandPerformanceError] = useState(false)
+  const [brandPerformanceRetryCount, setBrandPerformanceRetryCount] = useState(0)
   const navigate = useNavigate()
   const { resetPreference } = useThemeMode()
 
@@ -139,6 +144,38 @@ function DashboardPage() {
       cancelled = true
     }
   }, [session.kind, retryCount])
+
+  // Independent from the /dashboard/summary fetch above (Story 2.3, AC #3:
+  // Brand Performance is an "additional section", not part of the seven-
+  // field skeleton batch) — its own loading/error/retry cycle.
+  useEffect(() => {
+    if (session.kind !== 'authenticated') return
+    let cancelled = false
+    setBrandPerformanceError(false)
+
+    apiFetch('/dashboard/brand-performance')
+      .then(async (response) => {
+        if (cancelled) return
+        if (!response.ok) {
+          setBrandPerformanceError(true)
+          return
+        }
+        const body = (await response.json()) as BrandPerformanceSummary
+        if (!cancelled) {
+          setBrandPerformance(body)
+          setBrandPerformanceError(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBrandPerformanceError(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session.kind, brandPerformanceRetryCount])
 
   async function handleLogout() {
     setSubmitting(true)
@@ -278,6 +315,13 @@ function DashboardPage() {
           />
         </Box>
       </Box>
+
+      <BrandPerformanceSection
+        data={brandPerformance}
+        loading={brandPerformance === null && !brandPerformanceError}
+        error={brandPerformanceError}
+        onRetry={() => setBrandPerformanceRetryCount((count) => count + 1)}
+      />
     </Container>
   )
 }
