@@ -9,7 +9,7 @@ scattered os.environ calls"). Every layer reads config through
 from functools import lru_cache
 from urllib.parse import quote_plus
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -54,6 +54,27 @@ class Settings(BaseSettings):
     twilio_account_sid: str
     twilio_auth_token: str
     twilio_whatsapp_number: str
+
+    # [ASSUMPTION — CONFIRM] File-drop CSV is this story's own placeholder
+    # transport (PRD §13 Open Question #1 leaves the real Source System
+    # unresolved) — must be confirmed with the business/ops stakeholder who
+    # knows the real upstream system.
+    source_system_import_dir: str = Field(default="/data/source_system/incoming")
+
+    # [ASSUMPTION — CONFIRM] Neither the PRD nor the epics specify an exact
+    # nightly time — only "every night". 19:30 UTC = 01:30 Asia/Dhaka
+    # (UTC+6) is this story's own placeholder, same provisional status as
+    # source_system_import_dir above, so it gets the same config escape
+    # hatch rather than being a bare literal in scheduler/main.py.
+    nightly_import_cron_hour: int = Field(default=19, ge=0, le=23)
+    nightly_import_cron_minute: int = Field(default=30, ge=0, le=59)
+
+    @field_validator("source_system_import_dir")
+    @classmethod
+    def _source_system_import_dir_not_blank(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("source_system_import_dir must not be blank")
+        return value
 
     @property
     def database_url(self) -> str:

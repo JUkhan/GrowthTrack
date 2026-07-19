@@ -26,6 +26,16 @@ async def _clean_tables() -> AsyncIterator[None]:
         await conn.execute(text("DELETE FROM password_reset_tokens"))
         await conn.execute(text("DELETE FROM users"))
         await conn.execute(text("DELETE FROM revoked_tokens"))
+        # Staging tables and sales_data reference import_runs/teams, so
+        # those must be deleted first (FK-dependency order).
+        await conn.execute(text("DELETE FROM staging_sales_data"))
+        await conn.execute(text("DELETE FROM staging_brand_performance"))
+        await conn.execute(text("DELETE FROM staging_doctors"))
+        await conn.execute(text("DELETE FROM sales_data"))
+        await conn.execute(text("DELETE FROM import_runs"))
+        await conn.execute(text("DELETE FROM teams"))
+        await conn.execute(text("DELETE FROM doctors"))
+        await conn.execute(text("DELETE FROM brand_performance"))
     yield
 
 

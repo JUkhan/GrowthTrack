@@ -10,6 +10,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from adapters.persistence.advisory_locks import BOOTSTRAP_LOCK_KEY
 from adapters.persistence.database import Base
 from domain.models import Role, ThemePreference, User, UserStatus
 from ports.users import UserRepository
@@ -87,10 +88,10 @@ class SqlAlchemyUserRepository(UserRepository):
         return int(result.scalar_one())
 
     async def acquire_bootstrap_lock(self) -> None:
-        # Fixed, arbitrary 32-bit key reserved solely for first-run bootstrap
-        # serialization (Story 1.2) — do not reuse this key elsewhere.
         # Transaction-scoped: releases automatically on commit/rollback.
-        await self._session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": 890217364})
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": BOOTSTRAP_LOCK_KEY}
+        )
 
     async def increment_failed_login_count(self, user_id: uuid.UUID) -> int:
         # Atomic UPDATE ... RETURNING, not read-then-write — two concurrent
