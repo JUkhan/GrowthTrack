@@ -69,6 +69,17 @@ class Settings(BaseSettings):
     nightly_import_cron_hour: int = Field(default=19, ge=0, le=23)
     nightly_import_cron_minute: int = Field(default=30, ge=0, le=59)
 
+    # [ASSUMPTION] Neither the PRD nor epics.md define the Dashboard's exact
+    # "expected refresh window" (EXPERIENCE.md names the concept but not a
+    # number). The nightly import runs once per day (Story 2.1); 24 hours is
+    # this story's own placeholder — generous enough that a nightly job
+    # running a little late doesn't flap the badge, tight enough that a
+    # genuinely missed night is caught the next morning. Same
+    # provisional-default treatment as source_system_import_dir/
+    # nightly_import_cron_hour above — not a hard business-sign-off blocker
+    # like AC #6's aggregation formula, just flagged for the record.
+    dashboard_stale_after_hours: int = Field(default=24, gt=0)
+
     @field_validator("source_system_import_dir")
     @classmethod
     def _source_system_import_dir_not_blank(cls, value: str) -> str:

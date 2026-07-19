@@ -28,3 +28,18 @@ async def test_get_or_create_by_name_returns_different_ids_for_different_names()
     south_id = await _get_or_create("South")
 
     assert north_id != south_id
+
+
+async def _list_all():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        return await SqlAlchemyTeamRepository(session).list_all()
+
+
+async def test_list_all_returns_every_team_ordered_by_name():
+    south_id = await _get_or_create("South")
+    north_id = await _get_or_create("North")
+
+    teams = await _list_all()
+
+    assert teams == [(north_id, "North"), (south_id, "South")]

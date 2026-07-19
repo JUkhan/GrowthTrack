@@ -46,3 +46,8 @@ class SqlAlchemyTeamRepository(TeamRepository):
             select(TeamModel.id).where(TeamModel.name == name)
         )
         return result.scalar_one()
+
+    async def list_all(self) -> list[tuple[uuid.UUID, str]]:
+        stmt = select(TeamModel.id, TeamModel.name).order_by(TeamModel.name)
+        result = await self._session.execute(stmt)
+        return [(row.id, row.name) for row in result.all()]

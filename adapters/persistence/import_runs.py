@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, text, update
+from sqlalchemy import DateTime, Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
@@ -115,3 +115,13 @@ class SqlAlchemyImportRunRepository(ImportRunRepository):
         )
         await self._session.execute(stmt)
         await self._session.commit()
+
+    async def get_last_successful_completed_at(self) -> datetime | None:
+        stmt = (
+            select(ImportRunModel.completed_at)
+            .where(ImportRunModel.status == ImportRunStatus.SUCCEEDED.value)
+            .order_by(ImportRunModel.completed_at.desc())
+            .limit(1)
+        )
+        result = await self._session.execute(stmt)
+        return result.scalar_one_or_none()

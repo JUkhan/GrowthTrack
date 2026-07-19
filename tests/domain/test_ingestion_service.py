@@ -1,6 +1,7 @@
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 
 from domain.ingestion import ImportOutcome, SourceSystemImportService
 from ports.brand_performance import BrandPerformanceRepository
@@ -62,6 +63,9 @@ class FakeTeamRepository(TeamRepository):
             self._teams[name] = uuid.uuid4()
         return self._teams[name]
 
+    async def list_all(self) -> list[tuple[uuid.UUID, str]]:
+        raise NotImplementedError
+
 
 class FakeSalesDataRepository(SalesDataRepository):
     def __init__(self, raise_on_upsert: bool = False) -> None:
@@ -72,6 +76,12 @@ class FakeSalesDataRepository(SalesDataRepository):
         if self._raise_on_upsert:
             raise RuntimeError("simulated persistence failure")
         self.upserted.extend(rows)
+
+    async def sum_amount_in_range(self, start_date: date, end_date: date) -> Decimal:
+        raise NotImplementedError
+
+    async def latest_per_team(self) -> list:
+        raise NotImplementedError
 
 
 class FakeBrandPerformanceRepository(BrandPerformanceRepository):
@@ -127,6 +137,9 @@ class FakeImportRunRepository(ImportRunRepository):
     ) -> None:
         self.calls.append("mark_failed")
         self.failed.append((run_id, correlation_id, started_at, completed_at))
+
+    async def get_last_successful_completed_at(self) -> datetime | None:
+        raise NotImplementedError
 
 
 @dataclass

@@ -10,7 +10,7 @@ function renderLoginPage(state?: { message: string }) {
   const router = createMemoryRouter(
     [
       { path: '/', element: <LoginPage /> },
-      { path: '/home', element: <div>Home Placeholder</div> },
+      { path: '/dashboard', element: <div>Home Placeholder</div> },
     ],
     { initialEntries: [state ? { pathname: '/', state } : '/'] },
   )
@@ -62,7 +62,7 @@ describe('LoginPage', () => {
     vi.unstubAllGlobals()
   })
 
-  it('navigates to /home on a successful login', async () => {
+  it('navigates to /dashboard on a successful login', async () => {
     stubFetch(
       () =>
         new Response(JSON.stringify({ id: '1', username: 'admin', role: 'administrator' }), {

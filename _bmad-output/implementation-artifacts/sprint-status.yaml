@@ -1,5 +1,5 @@
 # generated: 2026-07-14
-# last_updated: 2026-07-17
+# last_updated: 2026-07-19
 # project: GrowthTrack
 # project_key: NOKEY
 # tracking_system: file-system
@@ -60,7 +60,7 @@ development_status:
 
   epic-2: in-progress
   2-1-nightly-sales-reference-data-ingestion: done
-  2-2-dashboard-summary-view: backlog
+  2-2-dashboard-summary-view: review
   2-3-brand-performance-analytics: backlog
   2-4-prioritized-doctor-visit-list: backlog
   epic-2-retrospective: optional

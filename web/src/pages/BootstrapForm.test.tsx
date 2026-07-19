@@ -8,7 +8,7 @@ function renderBootstrapForm(onAdministratorExists: () => void = vi.fn()) {
   const router = createMemoryRouter(
     [
       { path: '/', element: <BootstrapForm onAdministratorExists={onAdministratorExists} /> },
-      { path: '/home', element: <div>Home Placeholder</div> },
+      { path: '/dashboard', element: <div>Home Placeholder</div> },
     ],
     { initialEntries: ['/'] },
   )
@@ -27,7 +27,7 @@ describe('BootstrapForm', () => {
     vi.unstubAllGlobals()
   })
 
-  it('navigates to /home on a successful bootstrap', async () => {
+  it('navigates to /dashboard on a successful bootstrap', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue(

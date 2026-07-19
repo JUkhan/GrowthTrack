@@ -107,7 +107,7 @@ function LoginPage() {
       const body = await response.json().catch(() => null)
       syncPreference(body?.theme_preference)
 
-      navigate('/home')
+      navigate('/dashboard')
     } catch {
       setError('Something went wrong. Please try again.')
     } finally {

@@ -39,7 +39,7 @@ function BootstrapForm({ onAdministratorExists }: BootstrapFormProps) {
         return
       }
 
-      navigate('/home')
+      navigate('/dashboard')
     } catch {
       setError('Something went wrong. Please try again.')
     } finally {

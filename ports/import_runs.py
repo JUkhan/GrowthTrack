@@ -51,3 +51,6 @@ class ImportRunRepository(ABC):
         and is lost to that recovery — the caller-supplied values let the
         implementation reconstruct a complete row from scratch."""
         ...
+
+    @abstractmethod
+    async def get_last_successful_completed_at(self) -> datetime | None: ...

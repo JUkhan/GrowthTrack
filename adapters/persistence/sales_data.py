@@ -12,12 +12,13 @@ from datetime import date
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import Date, ForeignKey, Numeric, UniqueConstraint
+from sqlalchemy import Date, ForeignKey, Numeric, UniqueConstraint, func, select
 from sqlalchemy.dialects.postgresql import UUID, insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
 from adapters.persistence.database import Base
+from domain.models import SalesData
 from ports.sales_data import SalesDataRepository
 
 
@@ -70,3 +71,32 @@ class SqlAlchemySalesDataRepository(SalesDataRepository):
             },
         )
         await self._session.execute(stmt)
+
+    async def sum_amount_in_range(self, start_date: date, end_date: date) -> Decimal:
+        # COALESCE is required because SQL SUM over zero rows is NULL, not
+        # 0 — returning None here would break the dashboard's arithmetic.
+        stmt = select(func.coalesce(func.sum(SalesDataModel.sales_amount), 0)).where(
+            SalesDataModel.date >= start_date, SalesDataModel.date <= end_date
+        )
+        result = await self._session.execute(stmt)
+        return Decimal(result.scalar_one())
+
+    async def latest_per_team(self) -> list[Any]:
+        # Postgres DISTINCT ON idiom for "latest row per group" — avoids an
+        # N+1 Python loop over teams.
+        stmt = select(SalesDataModel).distinct(SalesDataModel.team_id).order_by(
+            SalesDataModel.team_id, SalesDataModel.date.desc()
+        )
+        result = await self._session.execute(stmt)
+        return [self._to_domain(row) for row in result.scalars().all()]
+
+    @staticmethod
+    def _to_domain(row: SalesDataModel) -> SalesData:
+        return SalesData(
+            id=row.id,
+            date=row.date,
+            team_id=row.team_id,
+            sales_amount=row.sales_amount,
+            achievement_pct=row.achievement_pct,
+            growth_pct=row.growth_pct,
+        )

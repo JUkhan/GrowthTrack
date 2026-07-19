@@ -13,3 +13,6 @@ from abc import ABC, abstractmethod
 class TeamRepository(ABC):
     @abstractmethod
     async def get_or_create_by_name(self, name: str) -> uuid.UUID: ...
+
+    @abstractmethod
+    async def list_all(self) -> list[tuple[uuid.UUID, str]]: ...

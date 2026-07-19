@@ -11,6 +11,7 @@ export default defineConfig({
     // (docker/nginx/nginx.conf does the equivalent in staging/production).
     proxy: {
       '/auth': 'http://localhost:8000',
+      '/dashboard/summary': 'http://localhost:8000',
     },
   },
   test: {

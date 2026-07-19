@@ -122,3 +122,57 @@ async def test_try_acquire_lock_fails_when_another_transaction_already_holds_it(
 
         assert contender_acquired is False
         await holder_session.commit()
+
+
+async def _get_last_successful_completed_at() -> datetime | None:
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        return await SqlAlchemyImportRunRepository(session).get_last_successful_completed_at()
+
+
+async def test_get_last_successful_completed_at_returns_none_when_no_run_ever_succeeded():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        repo = SqlAlchemyImportRunRepository(session)
+        run_id = await repo.start(uuid.uuid4(), datetime.now(UTC))
+        await session.commit()
+    async with session_factory() as session:
+        await SqlAlchemyImportRunRepository(session).mark_failed(
+            run_id, uuid.uuid4(), datetime.now(UTC), datetime.now(UTC)
+        )
+
+    result = await _get_last_successful_completed_at()
+
+    assert result is None
+
+
+async def test_get_last_successful_completed_at_ignores_a_later_failed_run():
+    session_factory = create_session_factory()
+    succeeded_completed_at = datetime(2026, 7, 18, 10, 0, tzinfo=UTC)
+    async with session_factory() as session:
+        repo = SqlAlchemyImportRunRepository(session)
+        run_id = await repo.start(uuid.uuid4(), datetime.now(UTC))
+        await session.commit()
+    async with session_factory() as session:
+        await SqlAlchemyImportRunRepository(session).mark_succeeded(
+            run_id, succeeded_completed_at, records_processed=1, records_rejected=0
+        )
+        await session.commit()
+
+    later_correlation_id = uuid.uuid4()
+    later_started_at = datetime.now(UTC)
+    async with session_factory() as session:
+        later_repo = SqlAlchemyImportRunRepository(session)
+        later_run_id = await later_repo.start(later_correlation_id, later_started_at)
+        await session.commit()
+    async with session_factory() as session:
+        await SqlAlchemyImportRunRepository(session).mark_failed(
+            later_run_id,
+            later_correlation_id,
+            later_started_at,
+            datetime(2026, 7, 19, 10, 0, tzinfo=UTC),
+        )
+
+    result = await _get_last_successful_completed_at()
+
+    assert result == succeeded_completed_at
