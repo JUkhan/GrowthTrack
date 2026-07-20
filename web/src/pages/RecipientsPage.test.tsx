@@ -18,6 +18,24 @@ const USER_ROW = {
 
 const TEAM_ROW = { id: 't1', name: 'North Zone', status: 'active', version: 1 }
 
+const GROUP_ROW = {
+  id: 'rl1',
+  name: 'North Group',
+  kind: 'group',
+  status: 'active',
+  version: 1,
+  member_user_ids: ['u1'],
+}
+
+const CHANNEL_ROW = {
+  id: 'rl2',
+  name: 'North Channel',
+  kind: 'channel',
+  status: 'active',
+  version: 1,
+  member_user_ids: [],
+}
+
 function renderRecipientsPage() {
   const router = createMemoryRouter(
     [
@@ -34,9 +52,16 @@ function stubFetch(overrides: {
   meOk?: boolean
   users?: unknown[]
   teams?: unknown[]
+  recipientLists?: unknown[]
   onDeleteUser?: (id: string) => Response
 }) {
-  const { meOk = true, users = [USER_ROW], teams = [TEAM_ROW], onDeleteUser } = overrides
+  const {
+    meOk = true,
+    users = [USER_ROW],
+    teams = [TEAM_ROW],
+    recipientLists = [GROUP_ROW, CHANNEL_ROW],
+    onDeleteUser,
+  } = overrides
   vi.stubGlobal(
     'fetch',
     vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
@@ -51,6 +76,9 @@ function stubFetch(overrides: {
       }
       if (url === '/teams' && method === 'GET') {
         return Promise.resolve(new Response(JSON.stringify(teams), { status: 200 }))
+      }
+      if (url === '/recipient-lists' && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify(recipientLists), { status: 200 }))
       }
       if (url.startsWith('/users/') && method === 'DELETE') {
         const id = url.split('/').pop()!
@@ -199,5 +227,67 @@ describe('RecipientsPage', () => {
         'The last remaining Administrator account cannot be deleted or deactivated',
       ),
     ).toBeInTheDocument()
+  })
+
+  it('switches to the Recipient Groups tab and renders only group-kind lists from GET /recipient-lists', async () => {
+    stubFetch({})
+
+    renderRecipientsPage()
+    await screen.findByText('Karim')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Recipient Groups' }))
+
+    expect(await screen.findByText('North Group')).toBeInTheDocument()
+    expect(screen.queryByText('North Channel')).not.toBeInTheDocument()
+  })
+
+  it('switches to the Recipient Channels tab and renders only channel-kind lists from GET /recipient-lists', async () => {
+    stubFetch({})
+
+    renderRecipientsPage()
+    await screen.findByText('Karim')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('tab', { name: 'Recipient Channels' }))
+
+    expect(await screen.findByText('North Channel')).toBeInTheDocument()
+    expect(screen.queryByText('North Group')).not.toBeInTheDocument()
+  })
+
+  it('clears actionError when switching into the Recipient Groups tab', async () => {
+    stubFetch({
+      onDeleteUser: () =>
+        new Response(
+          JSON.stringify({ error: { code: 'last_administrator', message: 'Cannot remove' } }),
+          { status: 409 },
+        ),
+      users: [
+        {
+          id: 'admin-1',
+          name: null,
+          mobile: null,
+          username: 'admin',
+          role: 'administrator',
+          status: 'active',
+          team_id: null,
+          team_name: null,
+          version: 1,
+        },
+      ],
+    })
+
+    renderRecipientsPage()
+    await screen.findByText('admin')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Remove' }))
+    const confirmButtons = screen.getAllByRole('button', { name: 'Remove' })
+    await user.click(confirmButtons[confirmButtons.length - 1])
+    expect(await screen.findByText('Cannot remove')).toBeInTheDocument()
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    })
+
+    await user.click(screen.getByRole('tab', { name: 'Recipient Groups' }))
+
+    expect(screen.queryByText('Cannot remove')).not.toBeInTheDocument()
   })
 })

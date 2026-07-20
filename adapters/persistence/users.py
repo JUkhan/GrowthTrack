@@ -192,3 +192,12 @@ class SqlAlchemyUserRepository(UserRepository):
             .values(status=UserStatus.INACTIVE.value, version=UserModel.version + 1)
         )
         await self._session.execute(stmt)
+
+    async def get_many_by_ids(self, user_ids: list[uuid.UUID]) -> list[User]:
+        # An empty IN () is either invalid or always-false depending on
+        # dialect handling — don't rely on it, short-circuit instead.
+        if not user_ids:
+            return []
+        stmt = select(UserModel).where(UserModel.id.in_(user_ids))
+        result = await self._session.execute(stmt)
+        return [_to_domain(row) for row in result.scalars().all()]

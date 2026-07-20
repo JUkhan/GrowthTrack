@@ -15,6 +15,7 @@ export default defineConfig({
       '/dashboard/brand-performance': 'http://localhost:8000',
       '/users': 'http://localhost:8000',
       '/teams': 'http://localhost:8000',
+      '/recipient-lists': 'http://localhost:8000',
     },
   },
   test: {

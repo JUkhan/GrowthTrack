@@ -275,3 +275,36 @@ async def test_deactivate_flips_status_and_increments_version(seed_user):
 
     assert deactivated.status == UserStatus.INACTIVE
     assert deactivated.version == seeded.version + 1
+
+
+async def test_get_many_by_ids_returns_the_matching_subset():
+    team_id = await _seed_team("North Zone")
+    first = await _seed_directory_user("Karim", "+8801700000106", team_id)
+    second = await _seed_directory_user("Rahim", "+8801700000107", team_id)
+    await _seed_directory_user("Not Included", "+8801700000108", team_id)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        found = await SqlAlchemyUserRepository(session).get_many_by_ids([first.id, second.id])
+
+    assert {u.id for u in found} == {first.id, second.id}
+
+
+async def test_get_many_by_ids_with_empty_input_returns_empty_list_without_querying():
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        found = await SqlAlchemyUserRepository(session).get_many_by_ids([])
+
+    assert found == []
+
+
+async def test_get_many_by_ids_with_a_mix_of_found_and_unknown_ids_returns_only_found():
+    team_id = await _seed_team("North Zone")
+    seeded = await _seed_directory_user("Karim", "+8801700000109", team_id)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        found = await SqlAlchemyUserRepository(session).get_many_by_ids([seeded.id, uuid.uuid4()])
+
+    assert [u.id for u in found] == [seeded.id]

@@ -16,14 +16,21 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
+from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
 from api.auth.dependencies import get_current_user, get_db
 from domain.administrators import LastAdministratorError, LastAdministratorGuard
-from domain.models import Role, Team, User
+from domain.models import RecipientList, RecipientListKind, Role, Team, User
 from domain.recipients import (
     CannotEditAdministrator,
+    MemberInactive,
+    MemberNotAddressable,
+    MemberNotFound,
     MobileTaken,
+    RecipientListDirectoryService,
+    RecipientListNameTaken,
+    RecipientListNotFound,
     RoleNotAllowed,
     TeamDirectoryService,
     TeamInactive,
@@ -35,6 +42,7 @@ from domain.recipients import (
 
 users_router = APIRouter(prefix="/users", tags=["recipients"])
 teams_router = APIRouter(prefix="/teams", tags=["recipients"])
+recipient_lists_router = APIRouter(prefix="/recipient-lists", tags=["recipients"])
 
 
 class CreateUserRequest(BaseModel):
@@ -79,6 +87,27 @@ class TeamResponse(BaseModel):
     name: str
     status: str
     version: int
+
+
+class CreateRecipientListRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    kind: Literal["group", "channel"]
+    member_user_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class UpdateRecipientListRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    kind: Literal["group", "channel"]
+    member_user_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class RecipientListResponse(BaseModel):
+    id: uuid.UUID
+    name: str
+    kind: str
+    status: str
+    version: int
+    member_user_ids: list[uuid.UUID]
 
 
 def _mobile_taken() -> HTTPException:
@@ -154,6 +183,39 @@ def _not_found(entity: str) -> HTTPException:
     )
 
 
+def _recipient_list_name_taken() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "recipient_list_name_taken",
+            "message": "A Recipient Group/Channel with this name already exists",
+            "details": None,
+        },
+    )
+
+
+def _member_inactive() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "member_inactive",
+            "message": "This User has been removed and can't be added as a member",
+            "details": None,
+        },
+    )
+
+
+def _member_not_addressable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "member_not_addressable",
+            "message": "This User has no mobile number on file and can't receive WhatsApp sends",
+            "details": None,
+        },
+    )
+
+
 async def _team_name_map(teams: SqlAlchemyTeamRepository) -> dict[uuid.UUID, str]:
     return {team.id: team.name for team in await teams.list_all_full()}
 
@@ -176,6 +238,17 @@ def _to_directory_user_response(
 
 def _to_team_response(team: Team) -> TeamResponse:
     return TeamResponse(id=team.id, name=team.name, status=team.status.value, version=team.version)
+
+
+def _to_recipient_list_response(recipient_list: RecipientList) -> RecipientListResponse:
+    return RecipientListResponse(
+        id=recipient_list.id,
+        name=recipient_list.name,
+        kind=recipient_list.kind.value,
+        status=recipient_list.status.value,
+        version=recipient_list.version,
+        member_user_ids=recipient_list.member_user_ids,
+    )
 
 
 @users_router.post("", response_model=DirectoryUserResponse, status_code=status.HTTP_201_CREATED)
@@ -405,5 +478,138 @@ async def remove_team(
     except TeamNotFound:
         await session.commit()
         raise _not_found("Team") from None
+
+    await session.commit()
+
+
+@recipient_lists_router.post(
+    "", response_model=RecipientListResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_recipient_list(
+    body: CreateRecipientListRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> RecipientListResponse:
+    recipient_lists = SqlAlchemyRecipientListRepository(session)
+    users = SqlAlchemyUserRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    service = RecipientListDirectoryService(recipient_lists, users, audit_log)
+
+    try:
+        recipient_list = await service.create_recipient_list(
+            name=body.name,
+            kind=RecipientListKind(body.kind),
+            member_user_ids=body.member_user_ids,
+            actor_user_id=current_user.id,
+        )
+    except RecipientListNameTaken:
+        await session.commit()
+        raise _recipient_list_name_taken() from None
+    except MemberNotFound:
+        await session.commit()
+        raise _not_found("User") from None
+    except MemberInactive:
+        await session.commit()
+        raise _member_inactive() from None
+    except MemberNotAddressable:
+        await session.commit()
+        raise _member_not_addressable() from None
+    except IntegrityError:
+        # add() flushes immediately (unlike TeamRepository.add()), so a
+        # genuine concurrent-name race can raise here rather than at the
+        # commit below — same backstop, earlier catch point.
+        await session.rollback()
+        raise _recipient_list_name_taken() from None
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _recipient_list_name_taken() from None
+
+    return _to_recipient_list_response(recipient_list)
+
+
+@recipient_lists_router.get("", response_model=list[RecipientListResponse])
+async def list_recipient_lists(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> list[RecipientListResponse]:
+    recipient_lists = SqlAlchemyRecipientListRepository(session)
+    return [
+        _to_recipient_list_response(recipient_list)
+        for recipient_list in await recipient_lists.list_all_full()
+    ]
+
+
+@recipient_lists_router.patch("/{recipient_list_id}", response_model=RecipientListResponse)
+async def update_recipient_list(
+    recipient_list_id: uuid.UUID,
+    body: UpdateRecipientListRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> RecipientListResponse:
+    recipient_lists = SqlAlchemyRecipientListRepository(session)
+    users = SqlAlchemyUserRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    service = RecipientListDirectoryService(recipient_lists, users, audit_log)
+
+    try:
+        recipient_list = await service.update_recipient_list(
+            recipient_list_id=recipient_list_id,
+            name=body.name,
+            kind=RecipientListKind(body.kind),
+            member_user_ids=body.member_user_ids,
+            actor_user_id=current_user.id,
+        )
+    except RecipientListNotFound:
+        await session.commit()
+        raise _not_found("RecipientList") from None
+    except RecipientListNameTaken:
+        await session.commit()
+        raise _recipient_list_name_taken() from None
+    except MemberNotFound:
+        await session.commit()
+        raise _not_found("User") from None
+    except MemberInactive:
+        await session.commit()
+        raise _member_inactive() from None
+    except MemberNotAddressable:
+        await session.commit()
+        raise _member_not_addressable() from None
+    except IntegrityError:
+        # update_details() executes its UPDATE immediately, so a genuine
+        # concurrent-rename race can raise here rather than at the commit
+        # below — same backstop, earlier catch point.
+        await session.rollback()
+        raise _recipient_list_name_taken() from None
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _recipient_list_name_taken() from None
+
+    return _to_recipient_list_response(recipient_list)
+
+
+@recipient_lists_router.delete("/{recipient_list_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def remove_recipient_list(
+    recipient_list_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    recipient_lists = SqlAlchemyRecipientListRepository(session)
+    users = SqlAlchemyUserRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    service = RecipientListDirectoryService(recipient_lists, users, audit_log)
+
+    try:
+        await service.remove_recipient_list(
+            recipient_list_id=recipient_list_id, actor_user_id=current_user.id
+        )
+    except RecipientListNotFound:
+        await session.commit()
+        raise _not_found("RecipientList") from None
 
     await session.commit()

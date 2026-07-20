@@ -17,6 +17,8 @@ import ResponsiveDataTable from '../components/ResponsiveDataTable'
 import type { DataTableColumn } from '../components/ResponsiveDataTable'
 import StatusBadge from '../components/StatusBadge'
 import { apiFetch } from '../api/authClient'
+import RecipientListsPanel from './RecipientListsPanel'
+import type { RecipientListRow } from './RecipientListsPanel'
 import TeamFormDialog from './TeamFormDialog'
 import type { TeamFormValues } from './TeamFormDialog'
 import UserFormDialog from './UserFormDialog'
@@ -24,7 +26,7 @@ import type { TeamOption, UserFormValues } from './UserFormDialog'
 
 type SessionStatus = { kind: 'loading' } | { kind: 'authenticated' } | { kind: 'unauthenticated' }
 
-interface DirectoryUser {
+export interface DirectoryUser {
   id: string
   name: string | null
   mobile: string | null
@@ -62,12 +64,14 @@ function statusBadge(status: 'active' | 'inactive') {
 // (DashboardPage's own comment flags this as unowned by any story).
 function RecipientsPage() {
   const [session, setSession] = useState<SessionStatus>({ kind: 'loading' })
-  const [tab, setTab] = useState<'users' | 'teams'>('users')
+  const [tab, setTab] = useState<'users' | 'teams' | 'groups' | 'channels'>('users')
 
   const [users, setUsers] = useState<DirectoryUser[] | null>(null)
   const [usersError, setUsersError] = useState(false)
   const [teams, setTeams] = useState<DirectoryTeam[] | null>(null)
   const [teamsError, setTeamsError] = useState(false)
+  const [recipientLists, setRecipientLists] = useState<RecipientListRow[] | null>(null)
+  const [recipientListsError, setRecipientListsError] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
 
   const [userDialogOpen, setUserDialogOpen] = useState(false)
@@ -141,12 +145,28 @@ function RecipientsPage() {
     }
   }, [])
 
+  const loadRecipientLists = useCallback(async () => {
+    setRecipientListsError(false)
+    try {
+      const response = await apiFetch('/recipient-lists')
+      if (!isMountedRef.current) return
+      if (!response.ok) {
+        setRecipientListsError(true)
+        return
+      }
+      setRecipientLists((await response.json()) as RecipientListRow[])
+    } catch {
+      if (isMountedRef.current) setRecipientListsError(true)
+    }
+  }, [])
+
   useEffect(() => {
     if (session.kind !== 'authenticated') return
     // eslint-disable-next-line react-hooks/set-state-in-effect -- same fetch-on-mount shape as DashboardPage.tsx's existing summary/brand-performance effects
     loadUsers()
     loadTeams()
-  }, [session.kind, loadUsers, loadTeams])
+    loadRecipientLists()
+  }, [session.kind, loadUsers, loadTeams, loadRecipientLists])
 
   if (session.kind === 'loading') {
     return null
@@ -163,6 +183,9 @@ function RecipientsPage() {
   // Include the User's currently-assigned Team even if it's since been
   // deactivated, so editing doesn't render a blank Team select for a row
   // whose Team was removed after assignment (code review of Story 3.1).
+  const groupLists = (recipientLists ?? []).filter((list) => list.kind === 'group')
+  const channelLists = (recipientLists ?? []).filter((list) => list.kind === 'channel')
+
   const editingUserTeamOptions: TeamOption[] =
     editingUser && !activeTeamOptions.some((option) => option.id === editingUser.teamId)
       ? [
@@ -301,6 +324,8 @@ function RecipientsPage() {
       >
         <Tab value="users" label="Users" />
         <Tab value="teams" label="Sales Teams" />
+        <Tab value="groups" label="Recipient Groups" />
+        <Tab value="channels" label="Recipient Channels" />
       </Tabs>
 
       {tab === 'users' && (
@@ -388,6 +413,32 @@ function RecipientsPage() {
             )
           )}
         </Box>
+      )}
+
+      {tab === 'groups' && (
+        <RecipientListsPanel
+          kind="group"
+          title="Recipient Groups"
+          emptyMessage="No Recipient Groups yet. Add your first Group to target a named set of Users in one selection."
+          addButtonLabel="Add Recipient Group"
+          recipientLists={groupLists}
+          error={recipientListsError}
+          users={users ?? []}
+          onReload={loadRecipientLists}
+        />
+      )}
+
+      {tab === 'channels' && (
+        <RecipientListsPanel
+          kind="channel"
+          title="Recipient Channels"
+          emptyMessage="No Recipient Channels yet. Add your first Channel to target a named set of Users in one selection."
+          addButtonLabel="Add Recipient Channel"
+          recipientLists={channelLists}
+          error={recipientListsError}
+          users={users ?? []}
+          onReload={loadRecipientLists}
+        />
       )}
 
       <UserFormDialog

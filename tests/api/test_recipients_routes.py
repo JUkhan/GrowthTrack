@@ -13,6 +13,14 @@ async def _create_team(client, name: str = "North Zone") -> str:
     return response.json()["id"]
 
 
+async def _create_directory_user(client, mobile: str, team_id: str, name: str = "Karim") -> str:
+    response = await client.post(
+        "/users", json={"name": name, "mobile": mobile, "role": "sales_user", "team_id": team_id}
+    )
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
 # --- Auth enforcement (AD-8) --------------------------------------------------
 
 
@@ -25,6 +33,13 @@ async def test_list_users_without_cookie_returns_401(client):
 
 async def test_list_teams_without_cookie_returns_401(client):
     response = await client.get("/teams")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_list_recipient_lists_without_cookie_returns_401(client):
+    response = await client.get("/recipient-lists")
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "unauthorized"
@@ -432,3 +447,223 @@ async def test_remove_team_deactivates_it(client, seed_user):
     listed = await client.get("/teams")
     row = next(row for row in listed.json() if row["id"] == team_id)
     assert row["status"] == "inactive"
+
+
+# --- POST /recipient-lists -------------------------------------------------------
+
+
+async def test_create_recipient_list_group_succeeds_and_is_audit_logged(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    member_id = await _create_directory_user(client, "+8801700000501", team_id)
+
+    response = await client.post(
+        "/recipient-lists",
+        json={"name": "North Group", "kind": "group", "member_user_ids": [member_id]},
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "North Group"
+    assert body["kind"] == "group"
+    assert body["status"] == "active"
+    assert body["version"] == 1
+    assert body["member_user_ids"] == [member_id]
+
+
+async def test_create_recipient_list_channel_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(
+        "/recipient-lists", json={"name": "North Channel", "kind": "channel", "member_user_ids": []}
+    )
+
+    assert response.status_code == 201
+    assert response.json()["kind"] == "channel"
+
+
+async def test_create_recipient_list_with_a_taken_name_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+
+    response = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "channel", "member_user_ids": []}
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recipient_list_name_taken"
+
+
+async def test_create_recipient_list_with_a_nonexistent_member_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(
+        "/recipient-lists",
+        json={"name": "North Group", "kind": "group", "member_user_ids": [str(uuid.uuid4())]},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_create_recipient_list_with_an_inactive_member_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    member_id = await _create_directory_user(client, "+8801700000502", team_id)
+    await client.delete(f"/users/{member_id}")
+
+    response = await client.post(
+        "/recipient-lists",
+        json={"name": "North Group", "kind": "group", "member_user_ids": [member_id]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "member_inactive"
+
+
+async def test_create_recipient_list_with_an_administrator_member_returns_422(client, seed_user):
+    admin, _ = await seed_user(username="admin")
+    await _login_as_admin(client, seed_user, username="admin2")
+
+    response = await client.post(
+        "/recipient-lists",
+        json={"name": "North Group", "kind": "group", "member_user_ids": [str(admin.id)]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "member_not_addressable"
+
+
+# --- GET /recipient-lists ---------------------------------------------------------
+
+
+async def test_list_recipient_lists_includes_groups_and_channels(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    await client.post(
+        "/recipient-lists", json={"name": "North Channel", "kind": "channel", "member_user_ids": []}
+    )
+
+    response = await client.get("/recipient-lists")
+
+    assert response.status_code == 200
+    kinds = {row["kind"] for row in response.json()}
+    assert kinds == {"group", "channel"}
+
+
+# --- PATCH /recipient-lists/{id} --------------------------------------------------
+
+
+async def test_update_recipient_list_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    member_id = await _create_directory_user(client, "+8801700000503", team_id)
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "North Channel", "kind": "channel", "member_user_ids": [member_id]},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "North Channel"
+    assert body["kind"] == "channel"
+    assert body["member_user_ids"] == [member_id]
+
+
+async def test_update_recipient_list_on_an_unknown_id_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.patch(
+        f"/recipient-lists/{uuid.uuid4()}",
+        json={"name": "Name", "kind": "group", "member_user_ids": []},
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_update_recipient_list_to_a_name_taken_by_another_list_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await client.post(
+        "/recipient-lists", json={"name": "South Group", "kind": "group", "member_user_ids": []}
+    )
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "South Group", "kind": "group", "member_user_ids": []},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "recipient_list_name_taken"
+
+
+async def test_update_recipient_list_with_an_administrator_member_returns_422(client, seed_user):
+    admin, _ = await seed_user(username="admin")
+    await _login_as_admin(client, seed_user, username="admin2")
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "North Group", "kind": "group", "member_user_ids": [str(admin.id)]},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "member_not_addressable"
+
+
+# --- DELETE /recipient-lists/{id} -------------------------------------------------
+
+
+async def test_remove_recipient_list_deactivates_it(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+
+    response = await client.delete(f"/recipient-lists/{recipient_list_id}")
+
+    assert response.status_code == 204
+    listed = await client.get("/recipient-lists")
+    row = next(row for row in listed.json() if row["id"] == recipient_list_id)
+    assert row["status"] == "inactive"
+
+
+async def test_remove_recipient_list_on_an_unknown_id_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.delete(f"/recipient-lists/{uuid.uuid4()}")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_removed_recipient_lists_name_becomes_available_for_a_new_list(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+    await client.delete(f"/recipient-lists/{recipient_list_id}")
+
+    response = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "channel", "member_user_ids": []}
+    )
+
+    assert response.status_code == 201

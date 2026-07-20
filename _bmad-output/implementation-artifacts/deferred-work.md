@@ -60,6 +60,11 @@
 
 - **`list_all()` has no transactional/snapshot coordination with an in-progress `upsert_many()` ingestion batch** [adapters/persistence/doctors.py:80] — Reason: a concurrent read during a nightly ingestion run could observe a partially-updated snapshot. Pre-existing architectural pattern shared with `BrandPerformanceService`/`DashboardMetricsService` (same read-without-locking design across the codebase), not introduced by this diff. Revisit at the ingestion-locking level in a future story if Epic 4's Daily Report generation needs stronger consistency guarantees.
 
+## Deferred from: code review of 3-2-manage-recipient-groups-channels (2026-07-20)
+
+- **No guard against acting on an already-inactive RecipientList (double-remove / edit-while-inactive)** [domain/recipients.py:355-411] — Reason: `remove_recipient_list` only checks the target isn't `None`, not that it's still `ACTIVE`; calling `DELETE` twice bumps `version` and writes a duplicate `recipient_list.deactivated` audit entry, and `PATCH` on an inactive list silently edits its fields without reactivating it. Mirrors the identical, already-existing gap in `TeamDirectoryService.remove_team`/`update_team` and `UserDirectoryService.remove_user`/`update_user` (Story 3.1) — not introduced by this diff. Revisit across all three directory entities together.
+- **Whitespace-only name passes validation and can create a blank-named RecipientList** [domain/recipients.py:333-370] — Reason: Pydantic's `Field(min_length=1)` only checks raw character count, so a single-space name passes, then `.strip()` reduces it to `""` with no empty-after-strip check. Identical latent gap already present in `TeamDirectoryService.create_team`/`update_team`, not introduced by this diff. Revisit alongside the Team version of the same bug.
+
 ## Deferred from: code review of 3-1-manage-users-sales-teams (2026-07-20)
 
 - **Optimistic-concurrency `version` column has no stale-write rejection on any update path** [domain/models.py, adapters/persistence/users.py:161-169, adapters/persistence/teams.py:83-89] — Reason: explicitly out of scope per this story's own Dev Notes and Completion Notes: Story 3.4 (Concurrent-Edit Conflict Detection) owns stale-write rejection; `version` is kept incrementing correctly so that story has real data to work against.

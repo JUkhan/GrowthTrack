@@ -24,6 +24,9 @@ async def _clean_tables() -> AsyncIterator[None]:
         # it must be deleted before users or the FK constraint rejects the delete.
         await conn.execute(text("DELETE FROM audit_log_entries"))
         await conn.execute(text("DELETE FROM password_reset_tokens"))
+        # recipient_list_members has an FK to users.id, same reasoning
+        # password_reset_tokens is deleted before users.
+        await conn.execute(text("DELETE FROM recipient_list_members"))
         await conn.execute(text("DELETE FROM users"))
         await conn.execute(text("DELETE FROM revoked_tokens"))
         # Staging tables and sales_data reference import_runs/teams, so
@@ -34,6 +37,7 @@ async def _clean_tables() -> AsyncIterator[None]:
         await conn.execute(text("DELETE FROM sales_data"))
         await conn.execute(text("DELETE FROM import_runs"))
         await conn.execute(text("DELETE FROM teams"))
+        await conn.execute(text("DELETE FROM recipient_lists"))
         await conn.execute(text("DELETE FROM doctors"))
         await conn.execute(text("DELETE FROM brand_performance"))
     yield

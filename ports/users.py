@@ -77,3 +77,6 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def deactivate(self, user_id: uuid.UUID) -> None: ...
+
+    @abstractmethod
+    async def get_many_by_ids(self, user_ids: list[uuid.UUID]) -> list[Any]: ...

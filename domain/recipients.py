@@ -18,8 +18,18 @@ import uuid
 from datetime import UTC, datetime
 
 from domain.administrators import LastAdministratorGuard
-from domain.models import AuditLogEntry, Role, Team, TeamStatus, User, UserStatus
+from domain.models import (
+    AuditLogEntry,
+    RecipientList,
+    RecipientListKind,
+    Role,
+    Team,
+    TeamStatus,
+    User,
+    UserStatus,
+)
 from ports.audit import AuditLogRepository
+from ports.recipient_lists import RecipientListRepository
 from ports.teams import TeamRepository
 from ports.users import UserRepository
 
@@ -55,6 +65,32 @@ class TeamNotFound(Exception):
 class TeamInactive(Exception):
     """Raised when a User is created/updated against a Team that has been
     soft-deleted (``TeamStatus.INACTIVE``) — code review of Story 3.1."""
+
+
+class RecipientListNameTaken(Exception):
+    """Raised when a RecipientList name is already in use by a different
+    RecipientList (Group and Channel share one namespace, AD-4)."""
+
+
+class RecipientListNotFound(Exception):
+    """Raised when no RecipientList exists for a given id."""
+
+
+class MemberNotFound(Exception):
+    """Raised when a member id passed to a RecipientList does not
+    correspond to any existing User."""
+
+
+class MemberInactive(Exception):
+    """Raised when a member id passed to a RecipientList corresponds to a
+    soft-deleted (inactive) User."""
+
+
+class MemberNotAddressable(Exception):
+    """Raised when a member id passed to a RecipientList corresponds to a
+    User with no ``mobile`` on file (in practice, an Administrator row) —
+    a RecipientList exists to fan out WhatsApp sends to individual phone
+    numbers (Addendum A6), so every member must be WhatsApp-addressable."""
 
 
 class UserDirectoryService:
@@ -252,6 +288,128 @@ class TeamDirectoryService:
                 action="team.deactivated",
                 entity_type="Team",
                 entity_id=team_id,
+                details=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+class RecipientListDirectoryService:
+    def __init__(
+        self,
+        recipient_lists: RecipientListRepository,
+        users: UserRepository,
+        audit_log: AuditLogRepository,
+    ) -> None:
+        self._recipient_lists = recipient_lists
+        self._users = users
+        self._audit_log = audit_log
+
+    async def _ensure_members_valid(self, member_user_ids: list[uuid.UUID]) -> None:
+        # A RecipientList may legitimately start with zero members —
+        # nothing in the ACs requires a minimum.
+        if not member_user_ids:
+            return
+
+        users_by_id = {user.id: user for user in await self._users.get_many_by_ids(member_user_ids)}
+        for user_id in member_user_ids:
+            user = users_by_id.get(user_id)
+            if user is None:
+                raise MemberNotFound()
+            # Check status before mobile so an inactive-and-mobile-less row
+            # reports as inactive, the more actionable error.
+            if user.status != UserStatus.ACTIVE:
+                raise MemberInactive()
+            if user.mobile is None:
+                raise MemberNotAddressable()
+
+    async def create_recipient_list(
+        self,
+        name: str,
+        kind: RecipientListKind,
+        member_user_ids: list[uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> RecipientList:
+        name = name.strip()
+        if await self._recipient_lists.get_by_name(name) is not None:
+            raise RecipientListNameTaken()
+
+        # A double-submitted form or any future API consumer could repeat an
+        # id; dedupe before validation/replace_members so a duplicate never
+        # reaches the (recipient_list_id, user_id) composite-PK insert.
+        member_user_ids = list(dict.fromkeys(member_user_ids))
+        await self._ensure_members_valid(member_user_ids)
+
+        recipient_list_id = uuid.uuid4()
+        await self._recipient_lists.add(recipient_list_id, name, kind)
+        await self._recipient_lists.replace_members(recipient_list_id, member_user_ids)
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="recipient_list.created",
+                entity_type="RecipientList",
+                entity_id=recipient_list_id,
+                details={"name": name, "kind": kind.value, "member_count": len(member_user_ids)},
+                created_at=datetime.now(UTC),
+            )
+        )
+        return await self._recipient_lists.get_by_id(recipient_list_id)
+
+    async def update_recipient_list(
+        self,
+        recipient_list_id: uuid.UUID,
+        name: str,
+        kind: RecipientListKind,
+        member_user_ids: list[uuid.UUID],
+        actor_user_id: uuid.UUID,
+    ) -> RecipientList:
+        target = await self._recipient_lists.get_by_id(recipient_list_id)
+        if target is None:
+            raise RecipientListNotFound()
+
+        name = name.strip()
+        existing = await self._recipient_lists.get_by_name(name)
+        if existing is not None and existing.id != recipient_list_id:
+            raise RecipientListNameTaken()
+
+        member_user_ids = list(dict.fromkeys(member_user_ids))
+        await self._ensure_members_valid(member_user_ids)
+
+        # kind is purely a display label per AD-4 — editable here, unlike
+        # Role on User, which is genuinely immutable.
+        await self._recipient_lists.update_details(recipient_list_id, name, kind)
+        await self._recipient_lists.replace_members(recipient_list_id, member_user_ids)
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="recipient_list.updated",
+                entity_type="RecipientList",
+                entity_id=recipient_list_id,
+                details={"name": name, "kind": kind.value, "member_count": len(member_user_ids)},
+                created_at=datetime.now(UTC),
+            )
+        )
+        return await self._recipient_lists.get_by_id(recipient_list_id)
+
+    async def remove_recipient_list(
+        self, recipient_list_id: uuid.UUID, actor_user_id: uuid.UUID
+    ) -> None:
+        target = await self._recipient_lists.get_by_id(recipient_list_id)
+        if target is None:
+            raise RecipientListNotFound()
+
+        # Membership rows are left in place on soft-delete — they're
+        # harmless once the list itself is inactive.
+        await self._recipient_lists.deactivate(recipient_list_id)
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="recipient_list.deactivated",
+                entity_type="RecipientList",
+                entity_id=recipient_list_id,
                 details=None,
                 created_at=datetime.now(UTC),
             )

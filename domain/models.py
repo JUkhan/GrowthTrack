@@ -7,7 +7,7 @@ these to ORM models, it never the other way around.
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -25,6 +25,16 @@ class UserStatus(StrEnum):
 
 
 class TeamStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
+class RecipientListKind(StrEnum):
+    GROUP = "group"
+    CHANNEL = "channel"
+
+
+class RecipientListStatus(StrEnum):
     ACTIVE = "active"
     INACTIVE = "inactive"
 
@@ -88,6 +98,16 @@ class Team:
     name: str
     status: TeamStatus = TeamStatus.ACTIVE
     version: int = 1
+
+
+@dataclass
+class RecipientList:
+    id: uuid.UUID
+    name: str
+    kind: RecipientListKind
+    status: RecipientListStatus = RecipientListStatus.ACTIVE
+    version: int = 1
+    member_user_ids: list[uuid.UUID] = field(default_factory=list)
 
 
 @dataclass
