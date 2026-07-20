@@ -105,6 +105,7 @@ function RecipientListsPanel({
                 name: row.name,
                 kind: row.kind,
                 memberUserIds: row.member_user_ids,
+                version: row.version,
               })
               setDialogOpen(true)
             }}

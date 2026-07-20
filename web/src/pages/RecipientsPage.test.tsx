@@ -151,6 +151,45 @@ describe('RecipientsPage', () => {
     expect(await screen.findAllByText('Opted In')).not.toHaveLength(0)
   })
 
+  it('seeds the edit dialog version from the row and PATCHes with it', async () => {
+    const fetchMock = vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input.toString()
+      const method = init?.method ?? 'GET'
+
+      if (url === '/auth/me') return Promise.resolve(new Response(null, { status: 200 }))
+      if (url === '/users' && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify([USER_ROW]), { status: 200 }))
+      }
+      if (url === '/teams' && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify([TEAM_ROW]), { status: 200 }))
+      }
+      if (url === '/recipient-lists' && method === 'GET') {
+        return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }))
+      }
+      if (url === '/users/u1' && method === 'PATCH') {
+        return Promise.resolve(new Response(JSON.stringify(USER_ROW), { status: 200 }))
+      }
+      return Promise.resolve(new Response(null, { status: 200 }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    renderRecipientsPage()
+    await screen.findByText('Karim')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/users/u1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: expect.stringContaining(`"version":${USER_ROW.version}`),
+        }),
+      )
+    })
+  })
+
   it('reloads Users via onConsentChanged after a consent action without closing the dialog', async () => {
     let usersRequestCount = 0
     vi.stubGlobal(

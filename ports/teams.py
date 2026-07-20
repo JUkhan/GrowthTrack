@@ -40,7 +40,14 @@ class TeamRepository(ABC):
         ...
 
     @abstractmethod
-    async def update_name(self, team_id: uuid.UUID, name: str) -> None: ...
+    async def update_name(self, team_id: uuid.UUID, name: str, expected_version: int) -> bool:
+        """Atomic conditional update: only applies (and increments
+        ``version``) when the row's current ``version`` matches
+        ``expected_version``. Returns ``False`` — without mutating anything
+        — when it doesn't, meaning the version moved since the caller last
+        read it (Story 3.4's real backstop against a read-then-write race;
+        the caller's own pre-check is advisory only)."""
+        ...
 
     @abstractmethod
     async def deactivate(self, team_id: uuid.UUID) -> None: ...

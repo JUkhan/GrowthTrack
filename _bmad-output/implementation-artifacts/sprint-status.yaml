@@ -69,7 +69,7 @@ development_status:
   3-1-manage-users-sales-teams: done
   3-2-manage-recipient-groups-channels: done
   3-3-recipient-opt-in-consent-capture: done
-  3-4-concurrent-edit-conflict-detection: backlog
+  3-4-concurrent-edit-conflict-detection: done
   epic-3-retrospective: optional
 
   epic-4: backlog

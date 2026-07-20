@@ -90,6 +90,7 @@ describe('UserFormDialog', () => {
           mobile: '+8801700000302',
           role: 'sales_user',
           teamId: 'team-1',
+          version: 1,
           consentStatus: 'not_opted_in',
           consentRecordedAt: null,
         }}
@@ -113,6 +114,7 @@ describe('UserFormDialog', () => {
             name: 'Karim',
             mobile: '+8801700000302',
             team_id: 'team-1',
+            version: 1,
           }),
         }),
       )
@@ -163,6 +165,7 @@ describe('UserFormDialog', () => {
     mobile: '+8801700000305',
     role: 'sales_user' as const,
     teamId: 'team-1',
+    version: 1,
     consentStatus: 'opted_in' as const,
     consentRecordedAt: '2026-07-01T10:00:00Z',
   }
@@ -298,5 +301,117 @@ describe('UserFormDialog', () => {
     expect(
       screen.queryByText(/Saving this number will revoke/),
     ).not.toBeInTheDocument()
+  })
+
+  const CONFLICT_CURRENT = {
+    name: 'Karim Updated',
+    mobile: '+8801700000399',
+    team_id: 'team-1',
+    team_name: 'North Zone',
+    version: 2,
+  }
+
+  it('opens ConflictDialog with the current values on a 409 version_conflict response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'version_conflict',
+            message: 'conflict',
+            details: { current: CONFLICT_CURRENT },
+          },
+        }),
+        { status: 409 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('Conflicting Changes')).toBeInTheDocument()
+    expect(screen.getByText('Current: Karim Updated')).toBeInTheDocument()
+    expect(screen.getByText('Current: +8801700000399')).toBeInTheDocument()
+    expect(screen.getByText('Current: North Zone')).toBeInTheDocument()
+  })
+
+  it('clicking Discard My Changes repopulates the form and closes ConflictDialog, leaving the edit dialog open', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'version_conflict',
+            message: 'conflict',
+            details: { current: CONFLICT_CURRENT },
+          },
+        }),
+        { status: 409 },
+      ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Conflicting Changes')
+
+    await user.click(screen.getByRole('button', { name: 'Discard My Changes' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Conflicting Changes')).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('heading', { name: 'Edit User' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/name/i)).toHaveValue('Karim Updated')
+    expect(screen.getByLabelText(/mobile/i)).toHaveValue('+8801700000399')
+  })
+
+  it('clicking Keep My Changes re-PATCHes with the conflict version and calls onSaved on success', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'version_conflict',
+              message: 'conflict',
+              details: { current: CONFLICT_CURRENT },
+            },
+          }),
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'u1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onSaved = vi.fn()
+
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={onSaved} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Conflicting Changes')
+
+    await user.click(screen.getByRole('button', { name: 'Keep My Changes' }))
+
+    await waitFor(() => {
+      expect(onSaved).toHaveBeenCalledTimes(1)
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/users/u1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: 'Karim',
+          mobile: '+8801700000305',
+          team_id: 'team-1',
+          version: 2,
+        }),
+      }),
+    )
   })
 })

@@ -36,6 +36,7 @@ from domain.recipients import (
     TeamNotFound,
     UserDirectoryService,
     UserNotFound,
+    VersionConflict,
 )
 
 
@@ -72,10 +73,14 @@ def _make_team(name: str = "North Zone", status: TeamStatus = TeamStatus.ACTIVE)
 
 class FakeUserRepository:
     def __init__(
-        self, users: list[User] | None = None, active_administrator_count: int = 2
+        self,
+        users: list[User] | None = None,
+        active_administrator_count: int = 2,
+        simulate_update_race: bool = False,
     ) -> None:
         self._by_id = {u.id: u for u in (users or [])}
         self._active_administrator_count = active_administrator_count
+        self._simulate_update_race = simulate_update_race
         self.added: list[User] = []
         self.updated: list[tuple[uuid.UUID, str, str, uuid.UUID]] = []
         self.deactivated: list[uuid.UUID] = []
@@ -94,13 +99,19 @@ class FakeUserRepository:
         return list(self._by_id.values())
 
     async def update_directory_fields(
-        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID
-    ) -> None:
-        self.updated.append((user_id, name, mobile, team_id))
+        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID, expected_version: int
+    ) -> bool:
+        if self._simulate_update_race:
+            return False
         user = self._by_id[user_id]
+        if user.version != expected_version:
+            return False
+        self.updated.append((user_id, name, mobile, team_id))
         user.name = name
         user.mobile = mobile
         user.team_id = team_id
+        user.version += 1
+        return True
 
     async def deactivate(self, user_id: uuid.UUID) -> None:
         self.deactivated.append(user_id)
@@ -119,8 +130,11 @@ class FakeUserRepository:
 
 
 class FakeTeamRepository:
-    def __init__(self, teams: list[Team] | None = None) -> None:
+    def __init__(
+        self, teams: list[Team] | None = None, simulate_update_race: bool = False
+    ) -> None:
         self._by_id = {t.id: t for t in (teams or [])}
+        self._simulate_update_race = simulate_update_race
         self.added: list[tuple[uuid.UUID, str]] = []
         self.updated: list[tuple[uuid.UUID, str]] = []
         self.deactivated: list[uuid.UUID] = []
@@ -136,9 +150,16 @@ class FakeTeamRepository:
         self._by_id[team_id] = team
         self.added.append((team_id, name))
 
-    async def update_name(self, team_id: uuid.UUID, name: str) -> None:
+    async def update_name(self, team_id: uuid.UUID, name: str, expected_version: int) -> bool:
+        if self._simulate_update_race:
+            return False
+        team = self._by_id[team_id]
+        if team.version != expected_version:
+            return False
         self.updated.append((team_id, name))
-        self._by_id[team_id].name = name
+        team.name = name
+        team.version += 1
+        return True
 
     async def deactivate(self, team_id: uuid.UUID) -> None:
         self.deactivated.append(team_id)
@@ -154,8 +175,13 @@ class FakeAuditLogRepository:
 
 
 class FakeRecipientListRepository:
-    def __init__(self, recipient_lists: list[RecipientList] | None = None) -> None:
+    def __init__(
+        self,
+        recipient_lists: list[RecipientList] | None = None,
+        simulate_update_race: bool = False,
+    ) -> None:
         self._by_id = {rl.id: rl for rl in (recipient_lists or [])}
+        self._simulate_update_race = simulate_update_race
         self.added: list[tuple[uuid.UUID, str, RecipientListKind]] = []
         self.updated: list[tuple[uuid.UUID, str, RecipientListKind]] = []
         self.deactivated: list[uuid.UUID] = []
@@ -180,12 +206,22 @@ class FakeRecipientListRepository:
         self.added.append((recipient_list_id, name, kind))
 
     async def update_details(
-        self, recipient_list_id: uuid.UUID, name: str, kind: RecipientListKind
-    ) -> None:
-        self.updated.append((recipient_list_id, name, kind))
+        self,
+        recipient_list_id: uuid.UUID,
+        name: str,
+        kind: RecipientListKind,
+        expected_version: int,
+    ) -> bool:
+        if self._simulate_update_race:
+            return False
         rl = self._by_id[recipient_list_id]
+        if rl.version != expected_version:
+            return False
+        self.updated.append((recipient_list_id, name, kind))
         rl.name = name
         rl.kind = kind
+        rl.version += 1
+        return True
 
     async def deactivate(self, recipient_list_id: uuid.UUID) -> None:
         self.deactivated.append(recipient_list_id)
@@ -372,6 +408,7 @@ async def test_update_user_succeeds_and_writes_an_audit_entry():
         name="Updated Name",
         mobile="+8801700000004",
         team_id=new_team.id,
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -393,6 +430,7 @@ async def test_update_user_on_an_administrator_target_raises_cannot_edit_adminis
             name="New Name",
             mobile="+8801700000005",
             team_id=uuid.uuid4(),
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -414,6 +452,7 @@ async def test_update_user_with_a_mobile_taken_by_a_different_user_raises_mobile
             name="Name",
             mobile="+8801700000006",
             team_id=team.id,
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -431,6 +470,7 @@ async def test_update_user_keeping_its_own_mobile_does_not_raise_mobile_taken():
         name="Renamed",
         mobile="+8801700000008",
         team_id=target.team_id,
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -449,6 +489,7 @@ async def test_update_user_with_a_nonexistent_team_raises_team_not_found():
             name="Name",
             mobile="+8801700000009",
             team_id=uuid.uuid4(),
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -467,6 +508,7 @@ async def test_update_user_with_an_inactive_team_raises_team_inactive():
             name="Name",
             mobile="+8801700000010",
             team_id=team.id,
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -491,6 +533,7 @@ async def test_update_user_changing_mobile_on_an_opted_in_user_revokes_consent_a
         name="Renamed",
         mobile="+8801700000021",
         team_id=team.id,
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -514,6 +557,7 @@ async def test_update_user_changing_mobile_with_no_active_consent_writes_only_us
         name="Renamed",
         mobile="+8801700000023",
         team_id=team.id,
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -536,6 +580,7 @@ async def test_update_user_leaving_mobile_unchanged_never_calls_revoke_active():
         name="Renamed",
         mobile="+8801700000024",
         team_id=team.id,
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -593,6 +638,50 @@ async def test_remove_user_with_an_unknown_id_raises_user_not_found():
         await service.remove_user(user_id=uuid.uuid4(), actor_user_id=uuid.uuid4())
 
 
+async def test_update_user_with_a_stale_version_raises_version_conflict():
+    team = _make_team()
+    target = _make_sales_user(mobile="+8801700000012", team_id=team.id)
+    users = FakeUserRepository([target])
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    service = _user_service(users, audit_log, teams)
+
+    with pytest.raises(VersionConflict):
+        await service.update_user(
+            user_id=target.id,
+            name="Name",
+            mobile="+8801700000012",
+            team_id=team.id,
+            expected_version=target.version - 1,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert users.updated == []
+    assert audit_log.entries == []
+
+
+async def test_update_user_racing_atomic_backstop_raises_version_conflict():
+    team = _make_team()
+    target = _make_sales_user(mobile="+8801700000013", team_id=team.id)
+    users = FakeUserRepository([target], simulate_update_race=True)
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    service = _user_service(users, audit_log, teams)
+
+    with pytest.raises(VersionConflict):
+        await service.update_user(
+            user_id=target.id,
+            name="Name",
+            mobile="+8801700000013",
+            team_id=team.id,
+            expected_version=target.version,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert users.updated == []
+    assert audit_log.entries == []
+
+
 async def test_update_user_with_an_unknown_id_raises_user_not_found():
     users = FakeUserRepository()
     audit_log = FakeAuditLogRepository()
@@ -604,6 +693,7 @@ async def test_update_user_with_an_unknown_id_raises_user_not_found():
             name="Name",
             mobile="+8801700000011",
             team_id=uuid.uuid4(),
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -654,7 +744,7 @@ async def test_update_team_succeeds_and_writes_an_audit_entry():
     service = TeamDirectoryService(teams, audit_log)
 
     updated = await service.update_team(
-        team_id=team.id, name="Northern Zone", actor_user_id=uuid.uuid4()
+        team_id=team.id, name="Northern Zone", expected_version=1, actor_user_id=uuid.uuid4()
     )
 
     assert updated.name == "Northern Zone"
@@ -669,7 +759,9 @@ async def test_update_team_to_a_name_taken_by_a_different_team_raises_team_name_
     service = TeamDirectoryService(teams, audit_log)
 
     with pytest.raises(TeamNameTaken):
-        await service.update_team(team_id=target.id, name="South Zone", actor_user_id=uuid.uuid4())
+        await service.update_team(
+            team_id=target.id, name="South Zone", expected_version=1, actor_user_id=uuid.uuid4()
+        )
 
 
 async def test_update_team_with_an_unknown_id_raises_team_not_found():
@@ -678,7 +770,45 @@ async def test_update_team_with_an_unknown_id_raises_team_not_found():
     service = TeamDirectoryService(teams, audit_log)
 
     with pytest.raises(TeamNotFound):
-        await service.update_team(team_id=uuid.uuid4(), name="Name", actor_user_id=uuid.uuid4())
+        await service.update_team(
+            team_id=uuid.uuid4(), name="Name", expected_version=1, actor_user_id=uuid.uuid4()
+        )
+
+
+async def test_update_team_with_a_stale_version_raises_version_conflict():
+    team = Team(id=uuid.uuid4(), name="North Zone")
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    service = TeamDirectoryService(teams, audit_log)
+
+    with pytest.raises(VersionConflict):
+        await service.update_team(
+            team_id=team.id,
+            name="Northern Zone",
+            expected_version=team.version - 1,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert teams.updated == []
+    assert audit_log.entries == []
+
+
+async def test_update_team_racing_atomic_backstop_raises_version_conflict():
+    team = Team(id=uuid.uuid4(), name="North Zone")
+    teams = FakeTeamRepository([team], simulate_update_race=True)
+    audit_log = FakeAuditLogRepository()
+    service = TeamDirectoryService(teams, audit_log)
+
+    with pytest.raises(VersionConflict):
+        await service.update_team(
+            team_id=team.id,
+            name="Northern Zone",
+            expected_version=team.version,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert teams.updated == []
+    assert audit_log.entries == []
 
 
 async def test_remove_team_deactivates_it_and_writes_an_audit_entry():
@@ -857,6 +987,7 @@ async def test_update_recipient_list_renames_changes_kind_and_replaces_membershi
         name="Dhaka Channel",
         kind=RecipientListKind.CHANNEL,
         member_user_ids=[new_member.id],
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -878,6 +1009,7 @@ async def test_update_recipient_list_on_an_unknown_id_raises_recipient_list_not_
             name="Name",
             kind=RecipientListKind.GROUP,
             member_user_ids=[],
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -896,6 +1028,7 @@ async def test_update_recipient_list_to_a_name_taken_by_a_different_list_raises_
             name="South Zone",
             kind=RecipientListKind.GROUP,
             member_user_ids=[],
+            expected_version=1,
             actor_user_id=uuid.uuid4(),
         )
 
@@ -919,6 +1052,7 @@ async def test_update_recipient_list_removing_a_member_actually_drops_it():
         name="Dhaka Zone",
         kind=RecipientListKind.GROUP,
         member_user_ids=[member_one.id],
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
@@ -938,11 +1072,54 @@ async def test_update_recipient_list_dedupes_repeated_member_ids():
         name="Dhaka Zone",
         kind=RecipientListKind.GROUP,
         member_user_ids=[member.id, member.id],
+        expected_version=1,
         actor_user_id=uuid.uuid4(),
     )
 
     assert updated.member_user_ids == [member.id]
     assert audit_log.entries[0].details["member_count"] == 1
+
+
+async def test_update_recipient_list_with_a_stale_version_raises_version_conflict():
+    target = RecipientList(id=uuid.uuid4(), name="Dhaka Zone", kind=RecipientListKind.GROUP)
+    recipient_lists = FakeRecipientListRepository([target])
+    users = FakeUserRepository()
+    audit_log = FakeAuditLogRepository()
+    service = RecipientListDirectoryService(recipient_lists, users, audit_log)
+
+    with pytest.raises(VersionConflict):
+        await service.update_recipient_list(
+            recipient_list_id=target.id,
+            name="Dhaka Channel",
+            kind=RecipientListKind.CHANNEL,
+            member_user_ids=[],
+            expected_version=target.version - 1,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert recipient_lists.updated == []
+    assert audit_log.entries == []
+
+
+async def test_update_recipient_list_racing_atomic_backstop_raises_version_conflict():
+    target = RecipientList(id=uuid.uuid4(), name="Dhaka Zone", kind=RecipientListKind.GROUP)
+    recipient_lists = FakeRecipientListRepository([target], simulate_update_race=True)
+    users = FakeUserRepository()
+    audit_log = FakeAuditLogRepository()
+    service = RecipientListDirectoryService(recipient_lists, users, audit_log)
+
+    with pytest.raises(VersionConflict):
+        await service.update_recipient_list(
+            recipient_list_id=target.id,
+            name="Dhaka Channel",
+            kind=RecipientListKind.CHANNEL,
+            member_user_ids=[],
+            expected_version=target.version,
+            actor_user_id=uuid.uuid4(),
+        )
+
+    assert recipient_lists.updated == []
+    assert audit_log.entries == []
 
 
 # --- RecipientListDirectoryService.remove_recipient_list -----------------------

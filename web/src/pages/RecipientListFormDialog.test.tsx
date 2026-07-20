@@ -70,7 +70,13 @@ describe('RecipientListFormDialog', () => {
     render(
       <RecipientListFormDialog
         open
-        recipientList={{ id: '1', name: 'North Group', kind: 'group', memberUserIds: ['u1'] }}
+        recipientList={{
+          id: '1',
+          name: 'North Group',
+          kind: 'group',
+          memberUserIds: ['u1'],
+          version: 1,
+        }}
         kind="group"
         options={OPTIONS}
         onClose={vi.fn()}
@@ -88,7 +94,12 @@ describe('RecipientListFormDialog', () => {
         '/recipient-lists/1',
         expect.objectContaining({
           method: 'PATCH',
-          body: JSON.stringify({ name: 'North Group', kind: 'group', member_user_ids: ['u1'] }),
+          body: JSON.stringify({
+            name: 'North Group',
+            kind: 'group',
+            member_user_ids: ['u1'],
+            version: 1,
+          }),
         }),
       )
     })
@@ -129,5 +140,158 @@ describe('RecipientListFormDialog', () => {
       await screen.findByText('A Recipient Group/Channel with this name already exists'),
     ).toBeInTheDocument()
     expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  const CONFLICT_CURRENT = {
+    name: 'North Group Updated',
+    kind: 'channel',
+    member_user_ids: ['u1', 'u2'],
+    version: 2,
+  }
+
+  it('opens ConflictDialog showing the current values on a 409 version_conflict response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'version_conflict',
+              message: 'conflict',
+              details: { current: CONFLICT_CURRENT },
+            },
+          }),
+          { status: 409 },
+        ),
+      ),
+    )
+
+    render(
+      <RecipientListFormDialog
+        open
+        recipientList={{
+          id: '1',
+          name: 'North Group',
+          kind: 'group',
+          memberUserIds: ['u1'],
+          version: 1,
+        }}
+        kind="group"
+        options={OPTIONS}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    expect(await screen.findByText('Conflicting Changes')).toBeInTheDocument()
+    expect(screen.getByText('Current: North Group Updated')).toBeInTheDocument()
+    expect(screen.getByText('Current: Channel')).toBeInTheDocument()
+    expect(screen.getByText('Current: 2 members (added: u2)')).toBeInTheDocument()
+  })
+
+  it('clicking Discard My Changes repopulates the form from current and closes ConflictDialog, leaving the edit dialog open', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'version_conflict',
+              message: 'conflict',
+              details: { current: CONFLICT_CURRENT },
+            },
+          }),
+          { status: 409 },
+        ),
+      ),
+    )
+
+    render(
+      <RecipientListFormDialog
+        open
+        recipientList={{
+          id: '1',
+          name: 'North Group',
+          kind: 'group',
+          memberUserIds: ['u1'],
+          version: 1,
+        }}
+        kind="group"
+        options={OPTIONS}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Conflicting Changes')
+
+    await user.click(screen.getByRole('button', { name: 'Discard My Changes' }))
+
+    await waitFor(() => {
+      expect(screen.queryByText('Conflicting Changes')).not.toBeInTheDocument()
+    })
+    expect(screen.getByRole('heading', { name: 'Edit Recipient Group' })).toBeInTheDocument()
+    expect(screen.getByLabelText(/name/i)).toHaveValue('North Group Updated')
+  })
+
+  it('clicking Keep My Changes re-PATCHes with the conflict version and calls onSaved on a subsequent 200', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'version_conflict',
+              message: 'conflict',
+              details: { current: CONFLICT_CURRENT },
+            },
+          }),
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: '1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const onSaved = vi.fn()
+
+    render(
+      <RecipientListFormDialog
+        open
+        recipientList={{
+          id: '1',
+          name: 'North Group',
+          kind: 'group',
+          memberUserIds: ['u1'],
+          version: 1,
+        }}
+        kind="group"
+        options={OPTIONS}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await screen.findByText('Conflicting Changes')
+
+    await user.click(screen.getByRole('button', { name: 'Keep My Changes' }))
+
+    await waitFor(() => {
+      expect(onSaved).toHaveBeenCalledTimes(1)
+    })
+    expect(fetchMock).toHaveBeenLastCalledWith(
+      '/recipient-lists/1',
+      expect.objectContaining({
+        method: 'PATCH',
+        body: JSON.stringify({
+          name: 'North Group',
+          kind: 'group',
+          member_user_ids: ['u1'],
+          version: 2,
+        }),
+      }),
+    )
   })
 })

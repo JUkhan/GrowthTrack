@@ -8,9 +8,11 @@ satisfy the FK from `SalesData`.
 from __future__ import annotations
 
 import uuid
+from typing import cast
 
 from sqlalchemy import Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import UUID, insert
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -102,13 +104,14 @@ class SqlAlchemyTeamRepository(TeamRepository):
         result = await self._session.execute(stmt)
         return [_to_domain(row) for row in result.scalars().all()]
 
-    async def update_name(self, team_id: uuid.UUID, name: str) -> None:
+    async def update_name(self, team_id: uuid.UUID, name: str, expected_version: int) -> bool:
         stmt = (
             update(TeamModel)
-            .where(TeamModel.id == team_id)
+            .where(TeamModel.id == team_id, TeamModel.version == expected_version)
             .values(name=name, version=TeamModel.version + 1)
         )
-        await self._session.execute(stmt)
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount > 0
 
     async def deactivate(self, team_id: uuid.UUID) -> None:
         stmt = (

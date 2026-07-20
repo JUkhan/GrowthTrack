@@ -10,9 +10,11 @@ the tool used to touch it, not the ORM.
 from __future__ import annotations
 
 import uuid
+from typing import cast
 
 from sqlalchemy import Column, ForeignKey, Integer, String, Table, delete, insert, select, update
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -111,14 +113,22 @@ class SqlAlchemyRecipientListRepository(RecipientListRepository):
         return [_to_domain(row, members_by_list.get(row.id, [])) for row in rows]
 
     async def update_details(
-        self, recipient_list_id: uuid.UUID, name: str, kind: RecipientListKind
-    ) -> None:
+        self,
+        recipient_list_id: uuid.UUID,
+        name: str,
+        kind: RecipientListKind,
+        expected_version: int,
+    ) -> bool:
         stmt = (
             update(RecipientListModel)
-            .where(RecipientListModel.id == recipient_list_id)
+            .where(
+                RecipientListModel.id == recipient_list_id,
+                RecipientListModel.version == expected_version,
+            )
             .values(name=name, kind=kind.value, version=RecipientListModel.version + 1)
         )
-        await self._session.execute(stmt)
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount > 0
 
     async def deactivate(self, recipient_list_id: uuid.UUID) -> None:
         stmt = (

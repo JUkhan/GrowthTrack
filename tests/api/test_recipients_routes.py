@@ -310,7 +310,12 @@ async def test_update_user_succeeds(client, seed_user):
 
     response = await client.patch(
         f"/users/{user_id}",
-        json={"name": "Karim Updated", "mobile": "+8801700000209", "team_id": other_team_id},
+        json={
+            "name": "Karim Updated",
+            "mobile": "+8801700000209",
+            "team_id": other_team_id,
+            "version": 1,
+        },
     )
 
     assert response.status_code == 200
@@ -339,7 +344,7 @@ async def test_update_user_changing_mobile_on_an_opted_in_user_returns_not_opted
 
     response = await client.patch(
         f"/users/{user_id}",
-        json={"name": "Karim", "mobile": "+8801700000220", "team_id": team_id},
+        json={"name": "Karim", "mobile": "+8801700000220", "team_id": team_id, "version": 1},
     )
 
     assert response.status_code == 200
@@ -361,11 +366,74 @@ async def test_update_user_with_a_mobile_taken_by_another_user_returns_409(clien
 
     response = await client.patch(
         f"/users/{user_id}",
-        json={"name": "B", "mobile": "+8801700000210", "team_id": team_id},
+        json={"name": "B", "mobile": "+8801700000210", "team_id": team_id, "version": 1},
     )
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "mobile_taken"
+
+
+async def test_update_user_with_a_stale_version_returns_409_version_conflict(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000221",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+    await client.patch(
+        f"/users/{user_id}",
+        json={
+            "name": "Karim First Update",
+            "mobile": "+8801700000221",
+            "team_id": team_id,
+            "version": 1,
+        },
+    )
+
+    response = await client.patch(
+        f"/users/{user_id}",
+        json={
+            "name": "Karim Stale Update",
+            "mobile": "+8801700000221",
+            "team_id": team_id,
+            "version": 1,
+        },
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "version_conflict"
+    assert body["error"]["details"]["current"]["version"] == 2
+    assert body["error"]["details"]["current"]["name"] == "Karim First Update"
+
+
+async def test_update_user_with_version_omitted_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000222",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/users/{user_id}",
+        json={"name": "Karim", "mobile": "+8801700000222", "team_id": team_id},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 async def test_update_user_on_an_administrator_returns_400(client, seed_user):
@@ -375,7 +443,7 @@ async def test_update_user_on_an_administrator_returns_400(client, seed_user):
 
     response = await client.patch(
         f"/users/{admin.id}",
-        json={"name": "New Name", "mobile": "+8801700000212", "team_id": team_id},
+        json={"name": "New Name", "mobile": "+8801700000212", "team_id": team_id, "version": 1},
     )
 
     assert response.status_code == 400
@@ -464,7 +532,7 @@ async def test_update_team_succeeds(client, seed_user):
     await _login_as_admin(client, seed_user)
     team_id = await _create_team(client, "East Zone")
 
-    response = await client.patch(f"/teams/{team_id}", json={"name": "Eastern Zone"})
+    response = await client.patch(f"/teams/{team_id}", json={"name": "Eastern Zone", "version": 1})
 
     assert response.status_code == 200
     assert response.json()["name"] == "Eastern Zone"
@@ -475,10 +543,34 @@ async def test_update_team_to_a_taken_name_returns_409(client, seed_user):
     await _create_team(client, "East Zone")
     team_id = await _create_team(client, "West Zone")
 
-    response = await client.patch(f"/teams/{team_id}", json={"name": "East Zone"})
+    response = await client.patch(f"/teams/{team_id}", json={"name": "East Zone", "version": 1})
 
     assert response.status_code == 409
     assert response.json()["error"]["code"] == "team_name_taken"
+
+
+async def test_update_team_with_a_stale_version_returns_409_version_conflict(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "East Zone")
+    await client.patch(f"/teams/{team_id}", json={"name": "Eastern Zone", "version": 1})
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "Stale Zone", "version": 1})
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "version_conflict"
+    assert body["error"]["details"]["current"]["version"] == 2
+    assert body["error"]["details"]["current"]["name"] == "Eastern Zone"
+
+
+async def test_update_team_with_version_omitted_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "East Zone")
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "Eastern Zone"})
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 # --- DELETE /teams/{id} -------------------------------------------------------------
@@ -626,7 +718,12 @@ async def test_update_recipient_list_succeeds(client, seed_user):
 
     response = await client.patch(
         f"/recipient-lists/{recipient_list_id}",
-        json={"name": "North Channel", "kind": "channel", "member_user_ids": [member_id]},
+        json={
+            "name": "North Channel",
+            "kind": "channel",
+            "member_user_ids": [member_id],
+            "version": 1,
+        },
     )
 
     assert response.status_code == 200
@@ -641,7 +738,7 @@ async def test_update_recipient_list_on_an_unknown_id_returns_404(client, seed_u
 
     response = await client.patch(
         f"/recipient-lists/{uuid.uuid4()}",
-        json={"name": "Name", "kind": "group", "member_user_ids": []},
+        json={"name": "Name", "kind": "group", "member_user_ids": [], "version": 1},
     )
 
     assert response.status_code == 404
@@ -660,7 +757,7 @@ async def test_update_recipient_list_to_a_name_taken_by_another_list_returns_409
 
     response = await client.patch(
         f"/recipient-lists/{recipient_list_id}",
-        json={"name": "South Group", "kind": "group", "member_user_ids": []},
+        json={"name": "South Group", "kind": "group", "member_user_ids": [], "version": 1},
     )
 
     assert response.status_code == 409
@@ -677,11 +774,58 @@ async def test_update_recipient_list_with_an_administrator_member_returns_422(cl
 
     response = await client.patch(
         f"/recipient-lists/{recipient_list_id}",
-        json={"name": "North Group", "kind": "group", "member_user_ids": [str(admin.id)]},
+        json={
+            "name": "North Group",
+            "kind": "group",
+            "member_user_ids": [str(admin.id)],
+            "version": 1,
+        },
     )
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "member_not_addressable"
+
+
+async def test_update_recipient_list_with_a_stale_version_returns_409_version_conflict(
+    client, seed_user
+):
+    await _login_as_admin(client, seed_user)
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+    await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "North Channel", "kind": "channel", "member_user_ids": [], "version": 1},
+    )
+
+    response = await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "Stale Name", "kind": "group", "member_user_ids": [], "version": 1},
+    )
+
+    assert response.status_code == 409
+    body = response.json()
+    assert body["error"]["code"] == "version_conflict"
+    assert body["error"]["details"]["current"]["version"] == 2
+    assert body["error"]["details"]["current"]["name"] == "North Channel"
+    assert body["error"]["details"]["current"]["kind"] == "channel"
+
+
+async def test_update_recipient_list_with_version_omitted_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    created = await client.post(
+        "/recipient-lists", json={"name": "North Group", "kind": "group", "member_user_ids": []}
+    )
+    recipient_list_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/recipient-lists/{recipient_list_id}",
+        json={"name": "North Group", "kind": "group", "member_user_ids": []},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
 
 
 # --- DELETE /recipient-lists/{id} -------------------------------------------------

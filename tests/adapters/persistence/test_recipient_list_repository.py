@@ -158,10 +158,12 @@ async def test_update_details_persists_name_and_kind_and_increments_version():
     session_factory = create_session_factory()
 
     async with session_factory() as session:
-        await SqlAlchemyRecipientListRepository(session).update_details(
-            recipient_list_id, "North Channel", RecipientListKind.CHANNEL
+        result = await SqlAlchemyRecipientListRepository(session).update_details(
+            recipient_list_id, "North Channel", RecipientListKind.CHANNEL, 1
         )
         await session.commit()
+
+    assert result is True
 
     async with session_factory() as session:
         updated = await SqlAlchemyRecipientListRepository(session).get_by_id(recipient_list_id)
@@ -169,6 +171,51 @@ async def test_update_details_persists_name_and_kind_and_increments_version():
     assert updated.name == "North Channel"
     assert updated.kind == RecipientListKind.CHANNEL
     assert updated.version == 2
+
+
+async def test_update_details_with_a_stale_version_returns_false_and_leaves_row_unchanged():
+    recipient_list_id = await _add("North Group", RecipientListKind.GROUP)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        result = await SqlAlchemyRecipientListRepository(session).update_details(
+            recipient_list_id, "North Channel", RecipientListKind.CHANNEL, 0
+        )
+        await session.commit()
+
+    assert result is False
+
+    async with session_factory() as session:
+        unchanged = await SqlAlchemyRecipientListRepository(session).get_by_id(recipient_list_id)
+
+    assert unchanged.name == "North Group"
+    assert unchanged.kind == RecipientListKind.GROUP
+    assert unchanged.version == 1
+
+
+async def test_update_details_called_twice_with_the_same_stale_version_second_call_returns_false():
+    recipient_list_id = await _add("North Group", RecipientListKind.GROUP)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        repo = SqlAlchemyRecipientListRepository(session)
+        first_result = await repo.update_details(
+            recipient_list_id, "North Channel", RecipientListKind.CHANNEL, 1
+        )
+        second_result = await repo.update_details(
+            recipient_list_id, "North Zone", RecipientListKind.GROUP, 1
+        )
+        await session.commit()
+
+    assert first_result is True
+    assert second_result is False
+
+    async with session_factory() as session:
+        final = await SqlAlchemyRecipientListRepository(session).get_by_id(recipient_list_id)
+
+    assert final.name == "North Channel"
+    assert final.kind == RecipientListKind.CHANNEL
+    assert final.version == 2
 
 
 async def test_deactivate_flips_status_and_increments_version():

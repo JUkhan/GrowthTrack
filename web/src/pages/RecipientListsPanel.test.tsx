@@ -114,6 +114,28 @@ describe('RecipientListsPanel', () => {
     expect(screen.getByText('Rahim (inactive)')).toBeInTheDocument()
   })
 
+  it('seeds the edit dialog version from the row and PATCHes with it', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: 'rl1' }), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const user = userEvent.setup()
+    renderPanel()
+
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/recipient-lists/rl1',
+        expect.objectContaining({
+          method: 'PATCH',
+          body: expect.stringContaining(`"version":${GROUP_ROW.version}`),
+        }),
+      )
+    })
+  })
+
   it('shows the real member-count consequence text and calls DELETE on confirm', async () => {
     let deleteCalled = false
     vi.stubGlobal(

@@ -44,6 +44,7 @@ from domain.recipients import (
     TeamNotFound,
     UserDirectoryService,
     UserNotFound,
+    VersionConflict,
 )
 
 users_router = APIRouter(prefix="/users", tags=["recipients"])
@@ -62,6 +63,7 @@ class UpdateUserRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     mobile: str = Field(min_length=1, max_length=32)
     team_id: uuid.UUID
+    version: int = Field(ge=1)
 
 
 class DirectoryUserResponse(BaseModel):
@@ -93,6 +95,7 @@ class CreateTeamRequest(BaseModel):
 
 class UpdateTeamRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
+    version: int = Field(ge=1)
 
 
 class TeamResponse(BaseModel):
@@ -112,6 +115,7 @@ class UpdateRecipientListRequest(BaseModel):
     name: str = Field(min_length=1, max_length=255)
     kind: Literal["group", "channel"]
     member_user_ids: list[uuid.UUID] = Field(default_factory=list)
+    version: int = Field(ge=1)
 
 
 class RecipientListResponse(BaseModel):
@@ -262,6 +266,20 @@ def _consent_not_addressable() -> HTTPException:
     )
 
 
+def _version_conflict(current: BaseModel) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "version_conflict",
+            "message": (
+                "This record was changed by someone else since you loaded it. "
+                "Review the current version before saving."
+            ),
+            "details": {"current": current.model_dump(mode="json")},
+        },
+    )
+
+
 async def _team_name_map(teams: SqlAlchemyTeamRepository) -> dict[uuid.UUID, str]:
     return {team.id: team.name for team in await teams.list_all_full()}
 
@@ -401,6 +419,7 @@ async def update_user(
             name=body.name,
             mobile=body.mobile,
             team_id=body.team_id,
+            expected_version=body.version,
             actor_user_id=current_user.id,
         )
     except UserNotFound:
@@ -418,6 +437,16 @@ async def update_user(
     except TeamInactive:
         await session.commit()
         raise _team_inactive() from None
+    except VersionConflict:
+        await session.commit()
+        current = await users.get_by_id(user_id)
+        if current is None:
+            raise _not_found("User") from None
+        team_names = await _team_name_map(teams)
+        active_consent = await consents.get_active(user_id)
+        raise _version_conflict(
+            _to_directory_user_response(current, team_names, active_consent)
+        ) from None
 
     try:
         await session.commit()
@@ -571,7 +600,10 @@ async def update_team(
 
     try:
         team = await service.update_team(
-            team_id=team_id, name=body.name, actor_user_id=current_user.id
+            team_id=team_id,
+            name=body.name,
+            expected_version=body.version,
+            actor_user_id=current_user.id,
         )
     except TeamNotFound:
         await session.commit()
@@ -579,6 +611,12 @@ async def update_team(
     except TeamNameTaken:
         await session.commit()
         raise _team_name_taken() from None
+    except VersionConflict:
+        await session.commit()
+        current = await teams.get_by_id(team_id)
+        if current is None:
+            raise _not_found("Team") from None
+        raise _version_conflict(_to_team_response(current)) from None
 
     try:
         await session.commit()
@@ -686,6 +724,7 @@ async def update_recipient_list(
             name=body.name,
             kind=RecipientListKind(body.kind),
             member_user_ids=body.member_user_ids,
+            expected_version=body.version,
             actor_user_id=current_user.id,
         )
     except RecipientListNotFound:
@@ -703,6 +742,12 @@ async def update_recipient_list(
     except MemberNotAddressable:
         await session.commit()
         raise _member_not_addressable() from None
+    except VersionConflict:
+        await session.commit()
+        current = await recipient_lists.get_by_id(recipient_list_id)
+        if current is None:
+            raise _not_found("RecipientList") from None
+        raise _version_conflict(_to_recipient_list_response(current)) from None
     except IntegrityError:
         # update_details() executes its UPDATE immediately, so a genuine
         # concurrent-rename race can raise here rather than at the commit

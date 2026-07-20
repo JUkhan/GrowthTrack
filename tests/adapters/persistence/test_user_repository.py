@@ -247,10 +247,12 @@ async def test_update_directory_fields_persists_changes_and_increments_version(s
     session_factory = create_session_factory()
 
     async with session_factory() as session:
-        await SqlAlchemyUserRepository(session).update_directory_fields(
-            seeded.id, "Karim Updated", "+8801700000104", other_team_id
+        result = await SqlAlchemyUserRepository(session).update_directory_fields(
+            seeded.id, "Karim Updated", "+8801700000104", other_team_id, seeded.version
         )
         await session.commit()
+
+    assert result is True
 
     async with session_factory() as session:
         updated = await SqlAlchemyUserRepository(session).get_by_id(seeded.id)
@@ -259,6 +261,57 @@ async def test_update_directory_fields_persists_changes_and_increments_version(s
     assert updated.mobile == "+8801700000104"
     assert updated.team_id == other_team_id
     assert updated.version == seeded.version + 1
+
+
+async def test_update_directory_fields_with_a_stale_version_returns_false_and_leaves_row_unchanged(
+    seed_user,
+):
+    team_id = await _seed_team("North Zone")
+    seeded = await _seed_directory_user("Karim", "+8801700000110", team_id)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        result = await SqlAlchemyUserRepository(session).update_directory_fields(
+            seeded.id, "Karim Updated", "+8801700000111", team_id, seeded.version - 1
+        )
+        await session.commit()
+
+    assert result is False
+
+    async with session_factory() as session:
+        unchanged = await SqlAlchemyUserRepository(session).get_by_id(seeded.id)
+
+    assert unchanged.name == "Karim"
+    assert unchanged.mobile == "+8801700000110"
+    assert unchanged.version == seeded.version
+
+
+async def test_update_directory_fields_called_twice_with_the_same_version_second_call_returns_false(
+    seed_user,
+):
+    team_id = await _seed_team("North Zone")
+    seeded = await _seed_directory_user("Karim", "+8801700000112", team_id)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        repo = SqlAlchemyUserRepository(session)
+        first_result = await repo.update_directory_fields(
+            seeded.id, "First Update", "+8801700000113", team_id, seeded.version
+        )
+        second_result = await repo.update_directory_fields(
+            seeded.id, "Second Update", "+8801700000114", team_id, seeded.version
+        )
+        await session.commit()
+
+    assert first_result is True
+    assert second_result is False
+
+    async with session_factory() as session:
+        final = await SqlAlchemyUserRepository(session).get_by_id(seeded.id)
+
+    assert final.name == "First Update"
+    assert final.mobile == "+8801700000113"
+    assert final.version == seeded.version + 1
 
 
 async def test_deactivate_flips_status_and_increments_version(seed_user):

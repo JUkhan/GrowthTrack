@@ -78,7 +78,7 @@ class FakeTeamRepository(TeamRepository):
     async def list_all_full(self) -> list:
         raise NotImplementedError
 
-    async def update_name(self, team_id: uuid.UUID, name: str) -> None:
+    async def update_name(self, team_id: uuid.UUID, name: str, expected_version: int) -> bool:
         raise NotImplementedError
 
     async def deactivate(self, team_id: uuid.UUID) -> None:

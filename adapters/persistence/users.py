@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import cast
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -176,14 +178,15 @@ class SqlAlchemyUserRepository(UserRepository):
         return [_to_domain(row) for row in result.scalars().all()]
 
     async def update_directory_fields(
-        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID
-    ) -> None:
+        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID, expected_version: int
+    ) -> bool:
         stmt = (
             update(UserModel)
-            .where(UserModel.id == user_id)
+            .where(UserModel.id == user_id, UserModel.version == expected_version)
             .values(name=name, mobile=mobile, team_id=team_id, version=UserModel.version + 1)
         )
-        await self._session.execute(stmt)
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount > 0
 
     async def deactivate(self, user_id: uuid.UUID) -> None:
         stmt = (

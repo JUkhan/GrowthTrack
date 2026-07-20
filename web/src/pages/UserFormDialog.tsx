@@ -12,6 +12,7 @@ import TextField from '@mui/material/TextField'
 import Typography from '@mui/material/Typography'
 import MarkChatReadIcon from '@mui/icons-material/MarkChatRead'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
+import ConflictDialog from '../components/ConflictDialog'
 import ConfirmationDialog from '../components/ConfirmationDialog'
 import StatusBadge from '../components/StatusBadge'
 import { apiFetch } from '../api/authClient'
@@ -22,6 +23,7 @@ export interface UserFormValues {
   mobile: string
   role: 'sales_user' | 'manager'
   teamId: string
+  version: number
   consentStatus: 'opted_in' | 'not_opted_in'
   consentRecordedAt: string | null
 }
@@ -29,6 +31,14 @@ export interface UserFormValues {
 export interface TeamOption {
   id: string
   name: string
+}
+
+interface ConflictCurrent {
+  name: string
+  mobile: string
+  team_id: string | null
+  team_name: string | null
+  version: number
 }
 
 interface UserFormDialogProps {
@@ -61,10 +71,12 @@ function UserFormDialog({
   const [mobile, setMobile] = useState('')
   const [role, setRole] = useState<'sales_user' | 'manager'>('sales_user')
   const [teamId, setTeamId] = useState('')
+  const [version, setVersion] = useState(1)
   const [mobileAvailable, setMobileAvailable] = useState(true)
   const [checkingMobile, setCheckingMobile] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
+  const [conflict, setConflict] = useState<ConflictCurrent | null>(null)
 
   // Local copy of consent state — what the Consent section renders and what
   // grant/revoke actions update directly from their own response. Not
@@ -84,8 +96,10 @@ function UserFormDialog({
       setMobile(user?.mobile ?? '')
       setRole(user?.role ?? 'sales_user')
       setTeamId(user?.teamId ?? '')
+      setVersion(user?.version ?? 1)
       setMobileAvailable(true)
       setError(null)
+      setConflict(null)
       setConsentStatus(user?.consentStatus ?? 'not_opted_in')
       setConsentRecordedAt(user?.consentRecordedAt ?? null)
       setConsentError(null)
@@ -158,8 +172,7 @@ function UserFormDialog({
     }
   }
 
-  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault()
+  async function performSave(versionToSend: number) {
     setError(null)
     setSubmitting(true)
 
@@ -167,7 +180,9 @@ function UserFormDialog({
       const response = await apiFetch(user ? `/users/${user.id}` : '/users', {
         method: user ? 'PATCH' : 'POST',
         body: JSON.stringify(
-          user ? { name, mobile, team_id: teamId } : { name, mobile, role, team_id: teamId },
+          user
+            ? { name, mobile, team_id: teamId, version: versionToSend }
+            : { name, mobile, role, team_id: teamId },
         ),
       })
 
@@ -176,6 +191,11 @@ function UserFormDialog({
         if (body?.error?.code === 'mobile_taken') {
           setMobileAvailable(false)
         }
+        if (body?.error?.code === 'version_conflict') {
+          setConflict(body.error.details.current as ConflictCurrent)
+          return
+        }
+        setConflict(null)
         setError(body?.error?.message ?? 'Something went wrong. Please try again.')
         return
       }
@@ -186,6 +206,25 @@ function UserFormDialog({
     } finally {
       setSubmitting(false)
     }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    await performSave(version)
+  }
+
+  function handleKeepMine() {
+    if (!conflict) return
+    performSave(conflict.version)
+  }
+
+  function handleDiscardMine() {
+    if (!conflict) return
+    setName(conflict.name)
+    setMobile(conflict.mobile)
+    setTeamId(conflict.team_id ?? '')
+    setVersion(conflict.version)
+    setConflict(null)
   }
 
   return (
@@ -309,6 +348,26 @@ function UserFormDialog({
       submitting={consentActionSubmitting}
       onConfirm={handleRevokeConsent}
       onCancel={() => setRevokeConfirmOpen(false)}
+    />
+    <ConflictDialog
+      open={conflict !== null}
+      entityLabel="User"
+      fields={
+        conflict
+          ? [
+              { label: 'Name', mine: name, theirs: conflict.name },
+              { label: 'Mobile', mine: mobile, theirs: conflict.mobile },
+              {
+                label: 'Team',
+                mine: teams.find((team) => team.id === teamId)?.name ?? '—',
+                theirs: conflict.team_name ?? '—',
+              },
+            ]
+          : []
+      }
+      submitting={submitting}
+      onKeepMine={handleKeepMine}
+      onDiscardMine={handleDiscardMine}
     />
     </>
   )

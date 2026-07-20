@@ -112,6 +112,12 @@ class ConsentTargetNotAddressable(Exception):
     membership, applied here to consent."""
 
 
+class VersionConflict(Exception):
+    """Raised when a save's ``expected_version`` no longer matches the
+    record's current version — either the pre-check catches it directly,
+    or the atomic conditional update's zero-rowcount does (Story 3.4)."""
+
+
 class UserDirectoryService:
     def __init__(
         self,
@@ -190,6 +196,7 @@ class UserDirectoryService:
         name: str,
         mobile: str,
         team_id: uuid.UUID,
+        expected_version: int,
         actor_user_id: uuid.UUID,
     ) -> User:
         target = await self._users.get_by_id(user_id)
@@ -199,6 +206,9 @@ class UserDirectoryService:
         if target.role == Role.ADMINISTRATOR:
             raise CannotEditAdministrator()
 
+        if target.version != expected_version:
+            raise VersionConflict()
+
         mobile_changed = target.mobile != mobile
 
         await self._ensure_team_active(team_id)
@@ -207,7 +217,11 @@ class UserDirectoryService:
         if existing is not None and existing.id != user_id:
             raise MobileTaken()
 
-        await self._users.update_directory_fields(user_id, name, mobile, team_id)
+        updated = await self._users.update_directory_fields(
+            user_id, name, mobile, team_id, expected_version
+        )
+        if not updated:
+            raise VersionConflict()
         if mobile_changed:
             revoked = await self._consents.revoke_active(user_id)
             if revoked:
@@ -288,17 +302,24 @@ class TeamDirectoryService:
         )
         return await self._teams.get_by_id(team_id)
 
-    async def update_team(self, team_id: uuid.UUID, name: str, actor_user_id: uuid.UUID) -> Team:
+    async def update_team(
+        self, team_id: uuid.UUID, name: str, expected_version: int, actor_user_id: uuid.UUID
+    ) -> Team:
         target = await self._teams.get_by_id(team_id)
         if target is None:
             raise TeamNotFound()
+
+        if target.version != expected_version:
+            raise VersionConflict()
 
         name = name.strip()
         existing = await self._teams.get_by_name(name)
         if existing is not None and existing.id != team_id:
             raise TeamNameTaken()
 
-        await self._teams.update_name(team_id, name)
+        updated = await self._teams.update_name(team_id, name, expected_version)
+        if not updated:
+            raise VersionConflict()
         await self._audit_log.add(
             AuditLogEntry(
                 id=uuid.uuid4(),
@@ -399,11 +420,15 @@ class RecipientListDirectoryService:
         name: str,
         kind: RecipientListKind,
         member_user_ids: list[uuid.UUID],
+        expected_version: int,
         actor_user_id: uuid.UUID,
     ) -> RecipientList:
         target = await self._recipient_lists.get_by_id(recipient_list_id)
         if target is None:
             raise RecipientListNotFound()
+
+        if target.version != expected_version:
+            raise VersionConflict()
 
         name = name.strip()
         existing = await self._recipient_lists.get_by_name(name)
@@ -415,7 +440,11 @@ class RecipientListDirectoryService:
 
         # kind is purely a display label per AD-4 — editable here, unlike
         # Role on User, which is genuinely immutable.
-        await self._recipient_lists.update_details(recipient_list_id, name, kind)
+        updated = await self._recipient_lists.update_details(
+            recipient_list_id, name, kind, expected_version
+        )
+        if not updated:
+            raise VersionConflict()
         await self._recipient_lists.replace_members(recipient_list_id, member_user_ids)
         await self._audit_log.add(
             AuditLogEntry(

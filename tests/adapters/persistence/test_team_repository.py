@@ -144,14 +144,53 @@ async def test_update_name_persists_the_new_name_and_increments_version():
     session_factory = create_session_factory()
 
     async with session_factory() as session:
-        await SqlAlchemyTeamRepository(session).update_name(team_id, "Northern")
+        result = await SqlAlchemyTeamRepository(session).update_name(team_id, "Northern", 1)
         await session.commit()
+
+    assert result is True
 
     async with session_factory() as session:
         updated = await SqlAlchemyTeamRepository(session).get_by_id(team_id)
 
     assert updated.name == "Northern"
     assert updated.version == 2
+
+
+async def test_update_name_with_a_stale_version_returns_false_and_leaves_row_unchanged():
+    team_id = await _get_or_create("North")
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        result = await SqlAlchemyTeamRepository(session).update_name(team_id, "Northern", 0)
+        await session.commit()
+
+    assert result is False
+
+    async with session_factory() as session:
+        unchanged = await SqlAlchemyTeamRepository(session).get_by_id(team_id)
+
+    assert unchanged.name == "North"
+    assert unchanged.version == 1
+
+
+async def test_update_name_called_twice_with_the_same_stale_version_second_call_returns_false():
+    team_id = await _get_or_create("North")
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        repo = SqlAlchemyTeamRepository(session)
+        first_result = await repo.update_name(team_id, "Northern", 1)
+        second_result = await repo.update_name(team_id, "Northernmost", 1)
+        await session.commit()
+
+    assert first_result is True
+    assert second_result is False
+
+    async with session_factory() as session:
+        final = await SqlAlchemyTeamRepository(session).get_by_id(team_id)
+
+    assert final.name == "Northern"
+    assert final.version == 2
 
 
 async def test_deactivate_flips_status_and_increments_version():

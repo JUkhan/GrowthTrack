@@ -233,6 +233,7 @@ function RecipientsPage() {
                   mobile: row.mobile ?? '',
                   role: row.role as 'sales_user' | 'manager',
                   teamId: row.team_id ?? '',
+                  version: row.version,
                   consentStatus: row.consent_status,
                   consentRecordedAt: row.consent_recorded_at,
                 })
@@ -261,7 +262,7 @@ function RecipientsPage() {
           <Button
             size="small"
             onClick={() => {
-              setEditingTeam({ id: row.id, name: row.name })
+              setEditingTeam({ id: row.id, name: row.name, version: row.version })
               setTeamDialogOpen(true)
             }}
           >
