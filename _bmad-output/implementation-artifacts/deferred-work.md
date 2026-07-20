@@ -77,6 +77,10 @@
 
 - **Consent grant/revoke handlers lack an unmount guard** [web/src/pages/UserFormDialog.tsx:95-137] — Reason: `handleSubmit` in the same component already lacks an `isMountedRef`-style guard (unlike `RecipientsPage.tsx`'s load functions, which do have one), so this is consistent with an existing gap in this file rather than a regression introduced by this diff.
 
+## Deferred from: code review of 2-2-dashboard-summary-view (2026-07-20)
+
+- **`list_all()`/`latest_per_team()` don't filter to active-only teams; an active + soft-deleted team can share a display name, colliding on the Team Performance tile's React key** [adapters/persistence/teams.py:80-83, adapters/persistence/sales_data.py:84-91] — Reason: `Team.status`/soft-delete didn't exist at this story's commit (b8fb965..7aad716); it was added afterward by Story 3.1, which never updated these Dashboard read paths to match its own `get_by_name`/`get_or_create_by_name` active-only convention. Real in current HEAD; needs a follow-up against Story 3.1's integration, not this story.
+
 ## Deferred from: code review of story-3-4-concurrent-edit-conflict-detection (2026-07-20)
 
 - **Client-side "Keep My Changes" never updates local `version` state after a successful retry** [web/src/pages/RecipientListFormDialog.tsx, web/src/pages/TeamFormDialog.tsx, web/src/pages/UserFormDialog.tsx `handleKeepMine`] — Reason: `handleKeepMine` calls `performSave(conflict.version)` but never `setVersion(conflict.version)`. Currently masked because every caller closes the dialog on `onSaved` (state is discarded with the unmount), so no observable bug today. Revisit if a future caller ever keeps the dialog open after a successful save.

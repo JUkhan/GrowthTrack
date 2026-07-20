@@ -12,19 +12,23 @@ interface StatTileProps {
   value: ReactNode
   trend?: { direction: 'up' | 'down'; label: string }
   loading?: boolean
+  // Lets a tile whose loaded content is taller than a single value line
+  // (e.g. a multi-row list) reserve roughly the right amount of space while
+  // loading, so the tile doesn't visibly grow once data resolves.
+  skeletonHeight?: number
 }
 
 // DESIGN.md: trend indicator uses accent green (up) / status-error (down) —
 // never warning — and is always paired with an up/down glyph, never bare
 // colored text (same AA reasoning as the status-badge pairs, Task 5).
-function StatTile({ label, value, trend, loading = false }: StatTileProps) {
+function StatTile({ label, value, trend, loading = false, skeletonHeight = 38 }: StatTileProps) {
   return (
     <Paper sx={{ p: 2 }}>
       <Typography variant="caption" component="div" color="text.secondary">
         {label}
       </Typography>
       {loading ? (
-        <Skeleton variant="rounded" width="60%" height={38} />
+        <Skeleton variant="rounded" width="60%" height={skeletonHeight} />
       ) : (
         <>
           <Typography variant="statDisplay" component="div">

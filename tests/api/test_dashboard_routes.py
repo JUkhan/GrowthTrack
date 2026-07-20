@@ -1,7 +1,6 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
-from zoneinfo import ZoneInfo
 
 from adapters.persistence.brand_performance import SqlAlchemyBrandPerformanceRepository
 from adapters.persistence.database import create_session_factory
@@ -10,17 +9,26 @@ from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from domain.models import BrandPerformance, SalesData
 
+# 20:00 UTC = 02:00 the *next* day in Asia/Dhaka (UTC+6) — deliberately a
+# boundary where the UTC calendar date and the Dhaka calendar date differ.
+# [Review][Patch, 2026-07-20]: seeding via this fixed pair (rather than
+# `datetime.now(UTC).astimezone(ZoneInfo("Asia/Dhaka")).date()`, the exact
+# expression the route itself uses) means a regression in the route's own
+# UTC->Dhaka conversion actually fails this test instead of silently
+# recomputing the same (possibly wrong) value on both sides.
+_FIXED_NOW = datetime(2026, 7, 19, 20, 0, tzinfo=UTC)
+_FIXED_DHAKA_TODAY = date(2026, 7, 20)
+
 
 async def _seed_dashboard_data() -> None:
     session_factory = create_session_factory()
-    today = datetime.now(UTC).astimezone(ZoneInfo("Asia/Dhaka")).date()
     async with session_factory() as session:
         team_id = await SqlAlchemyTeamRepository(session).get_or_create_by_name("North")
         await SqlAlchemySalesDataRepository(session).upsert_many(
             [
                 SalesData(
                     id=uuid.uuid4(),
-                    date=today,
+                    date=_FIXED_DHAKA_TODAY,
                     team_id=team_id,
                     sales_amount=Decimal("1000.00"),
                     achievement_pct=Decimal("95.50"),
@@ -28,14 +36,12 @@ async def _seed_dashboard_data() -> None:
                 )
             ]
         )
-        run_id = await SqlAlchemyImportRunRepository(session).start(
-            uuid.uuid4(), datetime.now(UTC)
-        )
+        run_id = await SqlAlchemyImportRunRepository(session).start(uuid.uuid4(), _FIXED_NOW)
         await session.commit()
 
     async with session_factory() as session:
         await SqlAlchemyImportRunRepository(session).mark_succeeded(
-            run_id, datetime.now(UTC), records_processed=1, records_rejected=0
+            run_id, _FIXED_NOW, records_processed=1, records_rejected=0
         )
         await session.commit()
 
@@ -47,10 +53,19 @@ async def test_summary_without_cookie_returns_401(client):
     assert response.json()["error"]["code"] == "unauthorized"
 
 
-async def test_summary_with_valid_session_returns_200_with_expected_shape(client, seed_user):
+async def test_summary_with_valid_session_returns_200_with_expected_shape(
+    client, seed_user, monkeypatch
+):
     _, password = await seed_user(username="admin")
     await client.post("/auth/login", json={"username": "admin", "password": password})
     await _seed_dashboard_data()
+
+    class _FixedDatetime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return _FIXED_NOW.astimezone(tz) if tz else _FIXED_NOW
+
+    monkeypatch.setattr("api.dashboard.routes.datetime", _FixedDatetime)
 
     response = await client.get("/dashboard/summary")
 

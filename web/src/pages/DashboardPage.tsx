@@ -129,11 +129,14 @@ function DashboardPage() {
           setSummaryError(true)
           return
         }
-        const body = (await response.json()) as DashboardSummary
-        if (!cancelled) {
-          setSummary(body)
-          setSummaryError(false)
+        const body = (await response.json().catch(() => null)) as DashboardSummary | null
+        if (cancelled) return
+        if (body === null || !Array.isArray(body.team_performance)) {
+          setSummaryError(true)
+          return
         }
+        setSummary(body)
+        setSummaryError(false)
       })
       .catch(() => {
         if (!cancelled) {
@@ -209,10 +212,12 @@ function DashboardPage() {
     )
   }
 
-  const loading = summary === null
+  const loading = summary === null && !summaryError
   const freshness: FreshnessBadge = summary
     ? freshnessBadge(summary.data_as_of, summary.is_stale)
-    : { status: 'neutral', icon: <AccessTimeIcon />, label: 'Loading…' }
+    : summaryError
+      ? { status: 'warning', icon: <WarningAmberIcon />, label: 'Unable to load' }
+      : { status: 'neutral', icon: <AccessTimeIcon />, label: 'Loading…' }
 
   return (
     <Container maxWidth="lg" sx={{ py: 4 }}>
@@ -256,31 +261,35 @@ function DashboardPage() {
       >
         <StatTile
           label="Today's Sales"
-          value={loading ? null : formatCrBdt(summary.today_sales)}
+          value={loading ? null : summary ? formatCrBdt(summary.today_sales) : '—'}
           loading={loading}
         />
         <StatTile
           label="YTD Sales"
-          value={loading ? null : formatCrBdt(summary.ytd_sales)}
+          value={loading ? null : summary ? formatCrBdt(summary.ytd_sales) : '—'}
           loading={loading}
         />
         <StatTile
           label="MTD Sales"
-          value={loading ? null : formatCrBdt(summary.mtd_sales)}
+          value={loading ? null : summary ? formatCrBdt(summary.mtd_sales) : '—'}
           loading={loading}
         />
         <StatTile
           label="Achievement %"
-          value={loading ? null : displayPercent(summary.achievement_pct)}
+          value={loading ? null : summary ? displayPercent(summary.achievement_pct) : '—'}
           loading={loading}
         />
         <StatTile
           label="Growth %"
-          value={loading ? null : displayPercent(summary.growth_pct)}
+          value={loading ? null : summary ? displayPercent(summary.growth_pct) : '—'}
           trend={
-            !loading && summary.growth_pct !== null
+            summary && summary.growth_pct !== null
               ? {
-                  direction: Math.round(Number(summary.growth_pct)) >= 0 ? 'up' : 'down',
+                  // Direction reflects the raw value's actual sign, not the
+                  // rounded display label — Math.round(-0.4) is -0, and JS's
+                  // -0 >= 0 is true, so rounding-before-comparing silently
+                  // shows the "up" arrow for small negative growth.
+                  direction: Number(summary.growth_pct) < 0 ? 'down' : 'up',
                   label: formatPercent(summary.growth_pct),
                 }
               : undefined
@@ -300,8 +309,9 @@ function DashboardPage() {
           <StatTile
             label="Team Performance"
             loading={loading}
+            skeletonHeight={140}
             value={
-              loading ? null : (
+              loading ? null : summary ? (
                 <Stack spacing={1}>
                   {summary.team_performance.map((team) => (
                     <Stack
@@ -314,6 +324,8 @@ function DashboardPage() {
                     </Stack>
                   ))}
                 </Stack>
+              ) : (
+                '—'
               )
             }
           />

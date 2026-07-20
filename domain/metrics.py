@@ -62,12 +62,29 @@ def _aggregate_company_wide(rows: list[SalesData]) -> tuple[Decimal | None, Deci
     NOT verified against the sample. Both halves — the per-row ingestion
     treatment AND this aggregation — MUST be confirmed by a
     finance/business stakeholder before this story is marked done (AC #6).
+
+    [Review][Patch, 2026-07-20]: excludes any row whose `date` is older than
+    the most recent date represented in `rows` — a team's nightly row can be
+    missing or rejected on a given night (Story 2.1's per-row validation),
+    and blending that team's stale figures into an otherwise-current
+    headline would silently mix two different operational days into one
+    number. The excluded team still appears in `team_performance` (Task 2
+    Step 7) with its own last-known `achievement_pct` — only the
+    company-wide headline weight is affected.
     """
-    total_sales = sum((row.sales_amount for row in rows), Decimal(0))
-    if not rows or total_sales == 0:
+    if not rows:
         return None, None
-    weighted_achievement = sum((row.achievement_pct * row.sales_amount for row in rows), Decimal(0))
-    weighted_growth = sum((row.growth_pct * row.sales_amount for row in rows), Decimal(0))
+    latest_date = max(row.date for row in rows)
+    current_rows = [row for row in rows if row.date == latest_date]
+    total_sales = sum((row.sales_amount for row in current_rows), Decimal(0))
+    if total_sales == 0:
+        return None, None
+    weighted_achievement = sum(
+        (row.achievement_pct * row.sales_amount for row in current_rows), Decimal(0)
+    )
+    weighted_growth = sum(
+        (row.growth_pct * row.sales_amount for row in current_rows), Decimal(0)
+    )
     return weighted_achievement / total_sales, weighted_growth / total_sales
 
 

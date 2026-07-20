@@ -3,10 +3,13 @@
 // formatting logic lives in one place rather than being duplicated later.
 
 export function formatCrBdt(amount: string): string {
-  const crores = Number(amount) / 1e7
-  return `${crores.toFixed(1)} Cr`
+  const value = Number(amount)
+  if (Number.isNaN(value)) return '—'
+  return `${(value / 1e7).toFixed(1)} Cr`
 }
 
 export function formatPercent(pct: string): string {
-  return `${Math.round(Number(pct))}%`
+  const value = Number(pct)
+  if (Number.isNaN(value)) return '—'
+  return `${Math.round(value)}%`
 }

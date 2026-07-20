@@ -51,4 +51,12 @@ describe('StatTile', () => {
     expect(screen.queryByText('1.2 Cr')).not.toBeInTheDocument()
     expect(screen.queryByText('+3% vs last month')).not.toBeInTheDocument()
   })
+
+  it('sizes the loading skeleton to skeletonHeight when provided, for tiles with taller loaded content', () => {
+    const { container } = renderWithTheme(
+      <StatTile label="Team Performance" value="North 95%" loading skeletonHeight={140} />,
+    )
+
+    expect(container.querySelector('.MuiSkeleton-root')).toHaveStyle({ height: '140px' })
+  })
 })

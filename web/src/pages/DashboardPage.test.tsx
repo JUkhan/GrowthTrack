@@ -96,6 +96,14 @@ describe('DashboardPage', () => {
     expect(await screen.findByText('Login Placeholder')).toBeInTheDocument()
   })
 
+  it('redirects to / when the /auth/me request itself fails', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+
+    renderDashboardPage()
+
+    expect(await screen.findByText('Login Placeholder')).toBeInTheDocument()
+  })
+
   it('shows 7 skeleton tiles while /dashboard/summary is pending', async () => {
     let resolvePending: (() => void) | undefined
     const pending = new Promise<Response>((resolve) => {
@@ -145,6 +153,17 @@ describe('DashboardPage', () => {
     expect(screen.getByText('No sends yet')).toBeInTheDocument()
     expect(screen.getByText('Team Performance')).toBeInTheDocument()
     expect(screen.getByText('North')).toBeInTheDocument()
+  })
+
+  it('renders the down/error trend for small negative growth that rounds to 0%, not the up/success trend', async () => {
+    stubFetch(
+      () => new Response(JSON.stringify(summaryBody({ growth_pct: '-0.4' })), { status: 200 }),
+    )
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('0%', { selector: '.MuiChip-label' })
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorError')
   })
 
   it('renders the warning-styled freshness badge with the stale copy when is_stale is true', async () => {
@@ -237,12 +256,16 @@ describe('DashboardPage', () => {
       }),
     )
 
-    renderDashboardPage()
+    const { container } = renderDashboardPage()
     const user = userEvent.setup()
 
     expect(
       await screen.findByText("Couldn't load dashboard data. Please try again."),
     ).toBeInTheDocument()
+    // Tiles must not stay stuck on skeletons once the error is known — an
+    // error banner alongside "still loading" tiles is a contradictory state.
+    expect(container.querySelectorAll('.MuiSkeleton-root')).toHaveLength(0)
+    expect(await screen.findByText('Unable to load')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: 'Retry' }))
 

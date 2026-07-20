@@ -195,6 +195,29 @@ def test_aggregate_company_wide_weighted_average():
     assert growth == Decimal("17.5")
 
 
+def test_aggregate_company_wide_excludes_teams_whose_latest_row_predates_the_most_recent_date():
+    rows = [
+        _row(
+            uuid.uuid4(), date(2026, 7, 19), "100", achievement=Decimal("40"), growth=Decimal("10")
+        ),
+        _row(
+            # Stale — a day older than the other team's latest row, excluded
+            # from the weighted average even though it's still shown in the
+            # Team Performance breakdown.
+            uuid.uuid4(),
+            date(2026, 7, 18),
+            "300",
+            achievement=Decimal("80"),
+            growth=Decimal("20"),
+        ),
+    ]
+
+    achievement, growth = _aggregate_company_wide(rows)
+
+    assert achievement == Decimal("40")
+    assert growth == Decimal("10")
+
+
 def test_aggregate_company_wide_empty_list_returns_none_none():
     assert _aggregate_company_wide([]) == (None, None)
 
