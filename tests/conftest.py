@@ -27,6 +27,9 @@ async def _clean_tables() -> AsyncIterator[None]:
         # recipient_list_members has an FK to users.id, same reasoning
         # password_reset_tokens is deleted before users.
         await conn.execute(text("DELETE FROM recipient_list_members"))
+        # opt_in_consents.user_id carries a ForeignKey("users.id"), same
+        # reasoning as password_reset_tokens/recipient_list_members.
+        await conn.execute(text("DELETE FROM opt_in_consents"))
         await conn.execute(text("DELETE FROM users"))
         await conn.execute(text("DELETE FROM revoked_tokens"))
         # Staging tables and sales_data reference import_runs/teams, so

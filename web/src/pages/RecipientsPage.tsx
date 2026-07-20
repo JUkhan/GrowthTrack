@@ -11,6 +11,8 @@ import Tabs from '@mui/material/Tabs'
 import Typography from '@mui/material/Typography'
 import BlockIcon from '@mui/icons-material/Block'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import MarkChatReadIcon from '@mui/icons-material/MarkChatRead'
+import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import ConfirmationDialog from '../components/ConfirmationDialog'
 import EmptyState from '../components/EmptyState'
 import ResponsiveDataTable from '../components/ResponsiveDataTable'
@@ -36,6 +38,8 @@ export interface DirectoryUser {
   team_id: string | null
   team_name: string | null
   version: number
+  consent_status: 'opted_in' | 'not_opted_in'
+  consent_recorded_at: string | null
 }
 
 interface DirectoryTeam {
@@ -56,6 +60,17 @@ function statusBadge(status: 'active' | 'inactive') {
     <StatusBadge status="success" icon={<CheckCircleIcon />} label="Active" />
   ) : (
     <StatusBadge status="neutral" icon={<BlockIcon />} label="Inactive" />
+  )
+}
+
+// Uses MarkChatReadIcon (not CheckCircleIcon) so the Opted In badge is
+// visually distinct from the Active status badge at a glance — both are
+// "success"-colored, so the icon shape is the only differentiator.
+function consentBadge(status: 'opted_in' | 'not_opted_in') {
+  return status === 'opted_in' ? (
+    <StatusBadge status="success" icon={<MarkChatReadIcon />} label="Opted In" />
+  ) : (
+    <StatusBadge status="warning" icon={<WarningAmberIcon />} label="Not Opted In" />
   )
 }
 
@@ -202,6 +217,7 @@ function RecipientsPage() {
     { key: 'role', header: 'Role', render: (row) => ROLE_LABELS[row.role] ?? row.role },
     { key: 'team', header: 'Team', render: (row) => row.team_name ?? '—' },
     { key: 'status', header: 'Status', render: (row) => statusBadge(row.status) },
+    { key: 'consent', header: 'Consent', render: (row) => consentBadge(row.consent_status) },
     {
       key: 'actions',
       header: '',
@@ -217,6 +233,8 @@ function RecipientsPage() {
                   mobile: row.mobile ?? '',
                   role: row.role as 'sales_user' | 'manager',
                   teamId: row.team_id ?? '',
+                  consentStatus: row.consent_status,
+                  consentRecordedAt: row.consent_recorded_at,
                 })
                 setUserDialogOpen(true)
               }}
@@ -450,6 +468,7 @@ function RecipientsPage() {
           setUserDialogOpen(false)
           loadUsers()
         }}
+        onConsentChanged={loadUsers}
       />
 
       <TeamFormDialog

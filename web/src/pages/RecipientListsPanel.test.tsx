@@ -15,6 +15,8 @@ const ACTIVE_USER: DirectoryUser = {
   team_id: 't1',
   team_name: 'North Zone',
   version: 1,
+  consent_status: 'not_opted_in',
+  consent_recorded_at: null,
 }
 
 const INACTIVE_MEMBER: DirectoryUser = {
@@ -27,6 +29,8 @@ const INACTIVE_MEMBER: DirectoryUser = {
   team_id: 't1',
   team_name: 'North Zone',
   version: 1,
+  consent_status: 'not_opted_in',
+  consent_recorded_at: null,
 }
 
 const GROUP_ROW: RecipientListRow = {

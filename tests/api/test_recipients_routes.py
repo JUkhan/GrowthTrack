@@ -45,6 +45,20 @@ async def test_list_recipient_lists_without_cookie_returns_401(client):
     assert response.json()["error"]["code"] == "unauthorized"
 
 
+async def test_grant_opt_in_consent_without_cookie_returns_401(client):
+    response = await client.post(f"/users/{uuid.uuid4()}/opt-in-consent")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_revoke_opt_in_consent_without_cookie_returns_401(client):
+    response = await client.delete(f"/users/{uuid.uuid4()}/opt-in-consent")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
 # --- POST /users ---------------------------------------------------------------
 
 
@@ -207,6 +221,23 @@ async def test_list_users_includes_administrators_and_sales_users(client, seed_u
     assert "sales_user" in roles
 
 
+async def test_list_users_reports_per_user_consent_status_in_the_same_call(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    opted_in_id = await _create_directory_user(client, "+8801700000217", team_id, "Opted In")
+    never_opted_id = await _create_directory_user(client, "+8801700000218", team_id, "Never Opted")
+    await client.post(f"/users/{opted_in_id}/opt-in-consent")
+
+    response = await client.get("/users")
+
+    assert response.status_code == 200
+    by_id = {row["id"]: row for row in response.json()}
+    assert by_id[opted_in_id]["consent_status"] == "opted_in"
+    assert by_id[opted_in_id]["consent_recorded_at"] is not None
+    assert by_id[never_opted_id]["consent_status"] == "not_opted_in"
+    assert by_id[never_opted_id]["consent_recorded_at"] is None
+
+
 # --- GET /users/mobile-availability -----------------------------------------------
 
 
@@ -287,6 +318,32 @@ async def test_update_user_succeeds(client, seed_user):
     assert body["name"] == "Karim Updated"
     assert body["mobile"] == "+8801700000209"
     assert body["team_id"] == other_team_id
+
+
+async def test_update_user_changing_mobile_on_an_opted_in_user_returns_not_opted_in(
+    client, seed_user
+):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000219",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+    await client.post(f"/users/{user_id}/opt-in-consent")
+
+    response = await client.patch(
+        f"/users/{user_id}",
+        json={"name": "Karim", "mobile": "+8801700000220", "team_id": team_id},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["consent_status"] == "not_opted_in"
 
 
 async def test_update_user_with_a_mobile_taken_by_another_user_returns_409(client, seed_user):
@@ -667,3 +724,84 @@ async def test_removed_recipient_lists_name_becomes_available_for_a_new_list(cli
     )
 
     assert response.status_code == 201
+
+
+# --- POST /users/{id}/opt-in-consent ----------------------------------------
+
+
+async def test_grant_opt_in_consent_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    user_id = await _create_directory_user(client, "+8801700000601", team_id)
+
+    response = await client.post(f"/users/{user_id}/opt-in-consent")
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["user_id"] == user_id
+    assert "granted_at" in body
+
+
+async def test_grant_opt_in_consent_for_a_nonexistent_user_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(f"/users/{uuid.uuid4()}/opt-in-consent")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_grant_opt_in_consent_for_an_administrator_returns_422(client, seed_user):
+    admin, _ = await seed_user(username="admin")
+    await _login_as_admin(client, seed_user, username="admin2")
+
+    response = await client.post(f"/users/{admin.id}/opt-in-consent")
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "consent_not_addressable"
+
+
+async def test_grant_opt_in_consent_a_second_time_without_revoking_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    user_id = await _create_directory_user(client, "+8801700000602", team_id)
+    await client.post(f"/users/{user_id}/opt-in-consent")
+
+    response = await client.post(f"/users/{user_id}/opt-in-consent")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "consent_already_active"
+
+
+# --- DELETE /users/{id}/opt-in-consent --------------------------------------
+
+
+async def test_revoke_opt_in_consent_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    user_id = await _create_directory_user(client, "+8801700000603", team_id)
+    await client.post(f"/users/{user_id}/opt-in-consent")
+
+    response = await client.delete(f"/users/{user_id}/opt-in-consent")
+
+    assert response.status_code == 204
+
+
+async def test_revoke_opt_in_consent_when_nothing_active_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    user_id = await _create_directory_user(client, "+8801700000604", team_id)
+
+    response = await client.delete(f"/users/{user_id}/opt-in-consent")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "consent_not_active"
+
+
+async def test_revoke_opt_in_consent_for_a_nonexistent_user_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.delete(f"/users/{uuid.uuid4()}/opt-in-consent")
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"

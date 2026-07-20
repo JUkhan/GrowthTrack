@@ -6,6 +6,7 @@ import pytest
 from domain.administrators import LastAdministratorError, LastAdministratorGuard
 from domain.models import (
     AuditLogEntry,
+    OptInConsent,
     RecipientList,
     RecipientListKind,
     RecipientListStatus,
@@ -17,10 +18,14 @@ from domain.models import (
 )
 from domain.recipients import (
     CannotEditAdministrator,
+    ConsentAlreadyActive,
+    ConsentNotActive,
+    ConsentTargetNotAddressable,
     MemberInactive,
     MemberNotAddressable,
     MemberNotFound,
     MobileTaken,
+    OptInConsentService,
     RecipientListDirectoryService,
     RecipientListNameTaken,
     RecipientListNotFound,
@@ -195,13 +200,52 @@ class FakeRecipientListRepository:
         return self.members_by_list.get(recipient_list_id, [])
 
 
+class FakeOptInConsentRepository:
+    def __init__(self, consents: list[OptInConsent] | None = None) -> None:
+        self._active_by_user: dict[uuid.UUID, OptInConsent] = {
+            c.user_id: c for c in (consents or []) if c.revoked_at is None
+        }
+        self.granted: list[tuple[uuid.UUID, str]] = []
+        self.revoke_calls: list[uuid.UUID] = []
+
+    async def get_active(self, user_id: uuid.UUID) -> OptInConsent | None:
+        return self._active_by_user.get(user_id)
+
+    async def get_active_by_user_ids(
+        self, user_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, OptInConsent]:
+        if not user_ids:
+            return {}
+        return {uid: c for uid, c in self._active_by_user.items() if uid in user_ids}
+
+    async def grant(self, user_id: uuid.UUID, mobile: str) -> OptInConsent:
+        self.granted.append((user_id, mobile))
+        consent = OptInConsent(
+            id=uuid.uuid4(), user_id=user_id, mobile=mobile, granted_at=datetime.now(UTC)
+        )
+        self._active_by_user[user_id] = consent
+        return consent
+
+    async def revoke_active(self, user_id: uuid.UUID) -> bool:
+        self.revoke_calls.append(user_id)
+        if user_id in self._active_by_user:
+            del self._active_by_user[user_id]
+            return True
+        return False
+
+
 def _user_service(
     users: FakeUserRepository,
     audit_log: FakeAuditLogRepository,
     teams: FakeTeamRepository | None = None,
+    consents: FakeOptInConsentRepository | None = None,
 ) -> UserDirectoryService:
     return UserDirectoryService(
-        users, teams or FakeTeamRepository(), audit_log, LastAdministratorGuard(users)
+        users,
+        teams or FakeTeamRepository(),
+        audit_log,
+        LastAdministratorGuard(users),
+        consents or FakeOptInConsentRepository(),
     )
 
 
@@ -425,6 +469,79 @@ async def test_update_user_with_an_inactive_team_raises_team_inactive():
             team_id=team.id,
             actor_user_id=uuid.uuid4(),
         )
+
+
+async def test_update_user_changing_mobile_on_an_opted_in_user_revokes_consent_and_double_audits():
+    team = _make_team()
+    target = _make_sales_user(mobile="+8801700000020", team_id=team.id)
+    active_consent = OptInConsent(
+        id=uuid.uuid4(),
+        user_id=target.id,
+        mobile="+8801700000020",
+        granted_at=datetime.now(UTC),
+    )
+    users = FakeUserRepository([target])
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    consents = FakeOptInConsentRepository([active_consent])
+    service = _user_service(users, audit_log, teams, consents)
+
+    await service.update_user(
+        user_id=target.id,
+        name="Renamed",
+        mobile="+8801700000021",
+        team_id=team.id,
+        actor_user_id=uuid.uuid4(),
+    )
+
+    assert consents.revoke_calls == [target.id]
+    actions = [entry.action for entry in audit_log.entries]
+    assert actions == ["user.consent_auto_revoked", "user.updated"]
+    assert audit_log.entries[0].details == {"reason": "mobile_number_changed"}
+
+
+async def test_update_user_changing_mobile_with_no_active_consent_writes_only_user_updated():
+    team = _make_team()
+    target = _make_sales_user(mobile="+8801700000022", team_id=team.id)
+    users = FakeUserRepository([target])
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    consents = FakeOptInConsentRepository()
+    service = _user_service(users, audit_log, teams, consents)
+
+    await service.update_user(
+        user_id=target.id,
+        name="Renamed",
+        mobile="+8801700000023",
+        team_id=team.id,
+        actor_user_id=uuid.uuid4(),
+    )
+
+    assert consents.revoke_calls == [target.id]
+    actions = [entry.action for entry in audit_log.entries]
+    assert actions == ["user.updated"]
+
+
+async def test_update_user_leaving_mobile_unchanged_never_calls_revoke_active():
+    team = _make_team()
+    target = _make_sales_user(mobile="+8801700000024", team_id=team.id)
+    users = FakeUserRepository([target])
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    consents = FakeOptInConsentRepository()
+    service = _user_service(users, audit_log, teams, consents)
+
+    await service.update_user(
+        user_id=target.id,
+        name="Renamed",
+        mobile="+8801700000024",
+        team_id=team.id,
+        actor_user_id=uuid.uuid4(),
+    )
+
+    assert consents.revoke_calls == []
+    actions = [entry.action for entry in audit_log.entries]
+    assert actions == ["user.updated"]
 
 
 # --- UserDirectoryService.remove_user -----------------------------------------
@@ -854,3 +971,125 @@ async def test_remove_recipient_list_with_an_unknown_id_raises_recipient_list_no
         await service.remove_recipient_list(
             recipient_list_id=uuid.uuid4(), actor_user_id=uuid.uuid4()
         )
+
+
+# --- OptInConsentService.grant_consent -----------------------------------------
+
+
+async def test_grant_consent_succeeds_and_writes_an_audit_entry():
+    target = _make_sales_user(mobile="+8801700000701")
+    users = FakeUserRepository([target])
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+    actor_id = uuid.uuid4()
+
+    consent = await service.grant_consent(user_id=target.id, actor_user_id=actor_id)
+
+    assert consent.user_id == target.id
+    assert consent.mobile == "+8801700000701"
+    assert consents.granted == [(target.id, "+8801700000701")]
+    assert len(audit_log.entries) == 1
+    assert audit_log.entries[0].action == "consent.granted"
+    assert audit_log.entries[0].entity_id == target.id
+    assert audit_log.entries[0].actor_user_id == actor_id
+    assert audit_log.entries[0].details == {"mobile": "+8801700000701"}
+
+
+async def test_grant_consent_when_already_active_raises_consent_already_active():
+    target = _make_sales_user(mobile="+8801700000702")
+    active_consent = OptInConsent(
+        id=uuid.uuid4(), user_id=target.id, mobile="+8801700000702", granted_at=datetime.now(UTC)
+    )
+    users = FakeUserRepository([target])
+    consents = FakeOptInConsentRepository([active_consent])
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(ConsentAlreadyActive):
+        await service.grant_consent(user_id=target.id, actor_user_id=uuid.uuid4())
+
+    assert audit_log.entries == []
+
+
+async def test_grant_consent_for_a_user_with_no_mobile_raises_consent_target_not_addressable():
+    admin = _make_administrator()
+    users = FakeUserRepository([admin])
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(ConsentTargetNotAddressable):
+        await service.grant_consent(user_id=admin.id, actor_user_id=uuid.uuid4())
+
+    assert audit_log.entries == []
+
+
+async def test_grant_consent_for_a_nonexistent_user_raises_user_not_found():
+    users = FakeUserRepository()
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(UserNotFound):
+        await service.grant_consent(user_id=uuid.uuid4(), actor_user_id=uuid.uuid4())
+
+
+# --- OptInConsentService.revoke_consent -----------------------------------------
+
+
+async def test_revoke_consent_succeeds_and_writes_an_audit_entry():
+    target = _make_sales_user(mobile="+8801700000703")
+    active_consent = OptInConsent(
+        id=uuid.uuid4(), user_id=target.id, mobile="+8801700000703", granted_at=datetime.now(UTC)
+    )
+    users = FakeUserRepository([target])
+    consents = FakeOptInConsentRepository([active_consent])
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+    actor_id = uuid.uuid4()
+
+    await service.revoke_consent(user_id=target.id, actor_user_id=actor_id)
+
+    assert consents.revoke_calls == [target.id]
+    assert len(audit_log.entries) == 1
+    assert audit_log.entries[0].action == "consent.revoked"
+    assert audit_log.entries[0].entity_id == target.id
+    assert audit_log.entries[0].actor_user_id == actor_id
+    assert audit_log.entries[0].details is None
+
+
+async def test_revoke_consent_when_nothing_active_raises_consent_not_active():
+    target = _make_sales_user(mobile="+8801700000704")
+    users = FakeUserRepository([target])
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(ConsentNotActive):
+        await service.revoke_consent(user_id=target.id, actor_user_id=uuid.uuid4())
+
+    assert audit_log.entries == []
+
+
+async def test_revoke_consent_for_a_user_with_no_mobile_raises_consent_target_not_addressable():
+    admin = _make_administrator()
+    users = FakeUserRepository([admin])
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(ConsentTargetNotAddressable):
+        await service.revoke_consent(user_id=admin.id, actor_user_id=uuid.uuid4())
+
+    assert audit_log.entries == []
+
+
+async def test_revoke_consent_for_a_nonexistent_user_raises_user_not_found():
+    users = FakeUserRepository()
+    consents = FakeOptInConsentRepository()
+    audit_log = FakeAuditLogRepository()
+    service = OptInConsentService(users, consents, audit_log)
+
+    with pytest.raises(UserNotFound):
+        await service.revoke_consent(user_id=uuid.uuid4(), actor_user_id=uuid.uuid4())

@@ -84,7 +84,15 @@ describe('UserFormDialog', () => {
     render(
       <UserFormDialog
         open
-        user={{ id: 'u1', name: 'Karim', mobile: '+8801700000302', role: 'sales_user', teamId: 'team-1' }}
+        user={{
+          id: 'u1',
+          name: 'Karim',
+          mobile: '+8801700000302',
+          role: 'sales_user',
+          teamId: 'team-1',
+          consentStatus: 'not_opted_in',
+          consentRecordedAt: null,
+        }}
         teams={TEAMS}
         onClose={vi.fn()}
         onSaved={onSaved}
@@ -147,5 +155,148 @@ describe('UserFormDialog', () => {
       expect(screen.getByRole('button', { name: 'Save' })).not.toBeDisabled()
     })
     expect(screen.queryByText('This mobile number is already in use')).not.toBeInTheDocument()
+  })
+
+  const OPTED_IN_USER = {
+    id: 'u1',
+    name: 'Karim',
+    mobile: '+8801700000305',
+    role: 'sales_user' as const,
+    teamId: 'team-1',
+    consentStatus: 'opted_in' as const,
+    consentRecordedAt: '2026-07-01T10:00:00Z',
+  }
+
+  const NOT_OPTED_IN_USER = {
+    ...OPTED_IN_USER,
+    consentStatus: 'not_opted_in' as const,
+    consentRecordedAt: null,
+  }
+
+  it('renders "Opted In" with a formatted timestamp for an opted-in user', async () => {
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+
+    expect(await screen.findByText('Opted In')).toBeInTheDocument()
+    expect(
+      screen.getByText(new Date(OPTED_IN_USER.consentRecordedAt).toLocaleString()),
+    ).toBeInTheDocument()
+  })
+
+  it('renders "Not Opted In" with no timestamp for a not-opted-in user', async () => {
+    render(
+      <UserFormDialog
+        open
+        user={NOT_OPTED_IN_USER}
+        teams={TEAMS}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+
+    expect(await screen.findByText('Not Opted In')).toBeInTheDocument()
+    expect(screen.queryByText('Opted In')).not.toBeInTheDocument()
+  })
+
+  it('omits the Consent section entirely in create mode', () => {
+    render(
+      <UserFormDialog open user={null} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+
+    expect(screen.queryByText('Consent')).not.toBeInTheDocument()
+    expect(screen.queryByText('Opted In')).not.toBeInTheDocument()
+    expect(screen.queryByText('Not Opted In')).not.toBeInTheDocument()
+  })
+
+  it('clicking Record Consent POSTs and flips the badge without closing the dialog', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ user_id: 'u1', granted_at: '2026-07-20T12:00:00Z' }), {
+        status: 201,
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const onSaved = vi.fn()
+
+    render(
+      <UserFormDialog
+        open
+        user={NOT_OPTED_IN_USER}
+        teams={TEAMS}
+        onClose={vi.fn()}
+        onSaved={onSaved}
+      />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Record Consent' }))
+
+    await waitFor(() => {
+      expect(screen.getByText('Opted In')).toBeInTheDocument()
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/users/u1/opt-in-consent',
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(onSaved).not.toHaveBeenCalled()
+  })
+
+  it('clicking Revoke Consent opens the ConfirmationDialog naming the real consequence, DELETEs on confirm, and flips the badge', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Revoke Consent' }))
+
+    expect(
+      await screen.findByText('This immediately stops all future WhatsApp notifications to Karim.'),
+    ).toBeInTheDocument()
+
+    const confirmButtons = screen.getAllByRole('button', { name: 'Revoke' })
+    await user.click(confirmButtons[confirmButtons.length - 1])
+
+    await waitFor(() => {
+      expect(screen.getByText('Not Opted In')).toBeInTheDocument()
+    })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/users/u1/opt-in-consent',
+      expect.objectContaining({ method: 'DELETE' }),
+    )
+  })
+
+  it('shows the mobile-change notice only for an opted-in user with an edited mobile value', async () => {
+    render(
+      <UserFormDialog open user={OPTED_IN_USER} teams={TEAMS} onClose={vi.fn()} onSaved={vi.fn()} />,
+    )
+    const user = userEvent.setup()
+    const mobileField = screen.getByLabelText(/mobile/i)
+    await user.clear(mobileField)
+    await user.type(mobileField, '+8801700000399')
+
+    expect(
+      await screen.findByText(/Saving this number will revoke Karim's existing WhatsApp consent/),
+    ).toBeInTheDocument()
+  })
+
+  it('does not show the mobile-change notice for a not-opted-in user even with an edited mobile value', async () => {
+    render(
+      <UserFormDialog
+        open
+        user={NOT_OPTED_IN_USER}
+        teams={TEAMS}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    const user = userEvent.setup()
+    const mobileField = screen.getByLabelText(/mobile/i)
+    await user.clear(mobileField)
+    await user.type(mobileField, '+8801700000399')
+
+    expect(
+      screen.queryByText(/Saving this number will revoke/),
+    ).not.toBeInTheDocument()
   })
 })

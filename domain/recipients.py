@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 from domain.administrators import LastAdministratorGuard
 from domain.models import (
     AuditLogEntry,
+    OptInConsent,
     RecipientList,
     RecipientListKind,
     Role,
@@ -29,6 +30,7 @@ from domain.models import (
     UserStatus,
 )
 from ports.audit import AuditLogRepository
+from ports.consent import OptInConsentRepository
 from ports.recipient_lists import RecipientListRepository
 from ports.teams import TeamRepository
 from ports.users import UserRepository
@@ -93,6 +95,23 @@ class MemberNotAddressable(Exception):
     numbers (Addendum A6), so every member must be WhatsApp-addressable."""
 
 
+class ConsentAlreadyActive(Exception):
+    """Raised when an attempt is made to grant consent for a User who
+    already has an active (non-revoked) consent row."""
+
+
+class ConsentNotActive(Exception):
+    """Raised when an attempt is made to revoke consent for a User with
+    no active consent row to revoke."""
+
+
+class ConsentTargetNotAddressable(Exception):
+    """Raised when an attempt is made to grant/revoke consent for a User
+    with no ``mobile`` on file (in practice, an Administrator row) — the
+    same reasoning MemberNotAddressable already applies to RecipientList
+    membership, applied here to consent."""
+
+
 class UserDirectoryService:
     def __init__(
         self,
@@ -100,11 +119,13 @@ class UserDirectoryService:
         teams: TeamRepository,
         audit_log: AuditLogRepository,
         last_admin_guard: LastAdministratorGuard,
+        consents: OptInConsentRepository,
     ) -> None:
         self._users = users
         self._teams = teams
         self._audit_log = audit_log
         self._last_admin_guard = last_admin_guard
+        self._consents = consents
 
     async def _ensure_team_active(self, team_id: uuid.UUID) -> None:
         team = await self._teams.get_by_id(team_id)
@@ -178,6 +199,8 @@ class UserDirectoryService:
         if target.role == Role.ADMINISTRATOR:
             raise CannotEditAdministrator()
 
+        mobile_changed = target.mobile != mobile
+
         await self._ensure_team_active(team_id)
 
         existing = await self._users.get_by_mobile(mobile)
@@ -185,6 +208,20 @@ class UserDirectoryService:
             raise MobileTaken()
 
         await self._users.update_directory_fields(user_id, name, mobile, team_id)
+        if mobile_changed:
+            revoked = await self._consents.revoke_active(user_id)
+            if revoked:
+                await self._audit_log.add(
+                    AuditLogEntry(
+                        id=uuid.uuid4(),
+                        actor_user_id=actor_user_id,
+                        action="user.consent_auto_revoked",
+                        entity_type="User",
+                        entity_id=user_id,
+                        details={"reason": "mobile_number_changed"},
+                        created_at=datetime.now(UTC),
+                    )
+                )
         await self._audit_log.add(
             AuditLogEntry(
                 id=uuid.uuid4(),
@@ -410,6 +447,71 @@ class RecipientListDirectoryService:
                 action="recipient_list.deactivated",
                 entity_type="RecipientList",
                 entity_id=recipient_list_id,
+                details=None,
+                created_at=datetime.now(UTC),
+            )
+        )
+
+
+class OptInConsentService:
+    def __init__(
+        self,
+        users: UserRepository,
+        consents: OptInConsentRepository,
+        audit_log: AuditLogRepository,
+    ) -> None:
+        self._users = users
+        self._consents = consents
+        self._audit_log = audit_log
+
+    async def grant_consent(self, user_id: uuid.UUID, actor_user_id: uuid.UUID) -> OptInConsent:
+        target = await self._users.get_by_id(user_id)
+        if target is None:
+            raise UserNotFound()
+        if target.mobile is None:
+            raise ConsentTargetNotAddressable()
+        if await self._consents.get_active(user_id) is not None:
+            raise ConsentAlreadyActive()
+
+        consent = await self._consents.grant(user_id, target.mobile)
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="consent.granted",
+                entity_type="User",
+                entity_id=user_id,
+                details={"mobile": target.mobile},
+                created_at=datetime.now(UTC),
+            )
+        )
+        return consent
+
+    async def revoke_consent(self, user_id: uuid.UUID, actor_user_id: uuid.UUID) -> None:
+        target = await self._users.get_by_id(user_id)
+        if target is None:
+            raise UserNotFound()
+        if target.mobile is None:
+            raise ConsentTargetNotAddressable()
+
+        active = await self._consents.get_active(user_id)
+        if active is None:
+            raise ConsentNotActive()
+
+        # get_active() above is advisory, same as grant_consent()'s pre-check —
+        # revoke_active() is the atomic operation. A concurrent revoke could
+        # have already flipped this row between the two calls, so only audit
+        # (and only succeed) if this call actually revoked something.
+        revoked = await self._consents.revoke_active(user_id)
+        if not revoked:
+            raise ConsentNotActive()
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="consent.revoked",
+                entity_type="User",
+                entity_id=user_id,
                 details=None,
                 created_at=datetime.now(UTC),
             )

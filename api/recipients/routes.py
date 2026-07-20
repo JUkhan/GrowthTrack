@@ -8,6 +8,7 @@ Role-Handling Matrix governing what Administrators can/can't do here.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -16,18 +17,23 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
+from adapters.persistence.consent import SqlAlchemyOptInConsentRepository
 from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
 from api.auth.dependencies import get_current_user, get_db
 from domain.administrators import LastAdministratorError, LastAdministratorGuard
-from domain.models import RecipientList, RecipientListKind, Role, Team, User
+from domain.models import OptInConsent, RecipientList, RecipientListKind, Role, Team, User
 from domain.recipients import (
     CannotEditAdministrator,
+    ConsentAlreadyActive,
+    ConsentNotActive,
+    ConsentTargetNotAddressable,
     MemberInactive,
     MemberNotAddressable,
     MemberNotFound,
     MobileTaken,
+    OptInConsentService,
     RecipientListDirectoryService,
     RecipientListNameTaken,
     RecipientListNotFound,
@@ -68,6 +74,13 @@ class DirectoryUserResponse(BaseModel):
     team_id: uuid.UUID | None
     team_name: str | None
     version: int
+    consent_status: Literal["opted_in", "not_opted_in"]
+    consent_recorded_at: datetime | None
+
+
+class OptInConsentResponse(BaseModel):
+    user_id: uuid.UUID
+    granted_at: datetime
 
 
 class MobileAvailabilityResponse(BaseModel):
@@ -216,12 +229,45 @@ def _member_not_addressable() -> HTTPException:
     )
 
 
+def _consent_already_active() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "consent_already_active",
+            "message": "This User already has active WhatsApp consent recorded",
+            "details": None,
+        },
+    )
+
+
+def _consent_not_active() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "consent_not_active",
+            "message": "This User has no active WhatsApp consent to revoke",
+            "details": None,
+        },
+    )
+
+
+def _consent_not_addressable() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "consent_not_addressable",
+            "message": "This User has no mobile number on file and can't receive WhatsApp sends",
+            "details": None,
+        },
+    )
+
+
 async def _team_name_map(teams: SqlAlchemyTeamRepository) -> dict[uuid.UUID, str]:
     return {team.id: team.name for team in await teams.list_all_full()}
 
 
 def _to_directory_user_response(
-    user: User, team_names: dict[uuid.UUID, str]
+    user: User, team_names: dict[uuid.UUID, str], active_consent: OptInConsent | None
 ) -> DirectoryUserResponse:
     return DirectoryUserResponse(
         id=user.id,
@@ -233,6 +279,8 @@ def _to_directory_user_response(
         team_id=user.team_id,
         team_name=team_names.get(user.team_id) if user.team_id is not None else None,
         version=user.version,
+        consent_status="opted_in" if active_consent else "not_opted_in",
+        consent_recorded_at=active_consent.granted_at if active_consent else None,
     )
 
 
@@ -260,8 +308,9 @@ async def create_user(
     users = SqlAlchemyUserRepository(session)
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
     service = UserDirectoryService(
-        users, teams, audit_log, LastAdministratorGuard(users)
+        users, teams, audit_log, LastAdministratorGuard(users), consents
     )
 
     try:
@@ -297,7 +346,8 @@ async def create_user(
         raise _mobile_taken() from None
 
     team_names = await _team_name_map(teams)
-    return _to_directory_user_response(user, team_names)
+    # A freshly created User can never have consent yet — no repository call.
+    return _to_directory_user_response(user, team_names, active_consent=None)
 
 
 @users_router.get("", response_model=list[DirectoryUserResponse])
@@ -307,9 +357,14 @@ async def list_users(
 ) -> list[DirectoryUserResponse]:
     users = SqlAlchemyUserRepository(session)
     teams = SqlAlchemyTeamRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
     team_names = await _team_name_map(teams)
     all_users = await users.list_all()
-    return [_to_directory_user_response(user, team_names) for user in all_users]
+    consent_by_user = await consents.get_active_by_user_ids([u.id for u in all_users])
+    return [
+        _to_directory_user_response(user, team_names, consent_by_user.get(user.id))
+        for user in all_users
+    ]
 
 
 @users_router.get("/mobile-availability", response_model=MobileAvailabilityResponse)
@@ -335,8 +390,9 @@ async def update_user(
     users = SqlAlchemyUserRepository(session)
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
     service = UserDirectoryService(
-        users, teams, audit_log, LastAdministratorGuard(users)
+        users, teams, audit_log, LastAdministratorGuard(users), consents
     )
 
     try:
@@ -370,7 +426,10 @@ async def update_user(
         raise _mobile_taken() from None
 
     team_names = await _team_name_map(teams)
-    return _to_directory_user_response(user, team_names)
+    # Re-read post-commit so a mobile change's auto-revoke (if any) is
+    # reflected — not the pre-update state.
+    active_consent = await consents.get_active(user_id)
+    return _to_directory_user_response(user, team_names, active_consent)
 
 
 @users_router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -382,8 +441,9 @@ async def remove_user(
     users = SqlAlchemyUserRepository(session)
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
     service = UserDirectoryService(
-        users, teams, audit_log, LastAdministratorGuard(users)
+        users, teams, audit_log, LastAdministratorGuard(users), consents
     )
 
     try:
@@ -394,6 +454,72 @@ async def remove_user(
     except LastAdministratorError as exc:
         await session.commit()
         raise _last_administrator(exc) from None
+
+    await session.commit()
+
+
+@users_router.post(
+    "/{user_id}/opt-in-consent",
+    response_model=OptInConsentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def grant_opt_in_consent(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> OptInConsentResponse:
+    users = SqlAlchemyUserRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    service = OptInConsentService(users, consents, audit_log)
+
+    try:
+        consent = await service.grant_consent(user_id=user_id, actor_user_id=current_user.id)
+        await session.commit()
+    except UserNotFound:
+        await session.commit()
+        raise _not_found("User") from None
+    except ConsentTargetNotAddressable:
+        await session.commit()
+        raise _consent_not_addressable() from None
+    except ConsentAlreadyActive:
+        await session.commit()
+        raise _consent_already_active() from None
+    except IntegrityError:
+        # The get_active() pre-check is advisory (same NFR-8 proportionality
+        # reasoning as MobileTaken/RecipientListNameTaken) — the partial
+        # unique index (ix_opt_in_consents_user_id_active_uq) is the real
+        # backstop for a genuine concurrent double-grant. grant()'s explicit
+        # flush() means this can surface from grant_consent() itself, not
+        # just from the commit below — caught here, not in a separate block.
+        await session.rollback()
+        raise _consent_already_active() from None
+
+    return OptInConsentResponse(user_id=user_id, granted_at=consent.granted_at)
+
+
+@users_router.delete("/{user_id}/opt-in-consent", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_opt_in_consent(
+    user_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> None:
+    users = SqlAlchemyUserRepository(session)
+    consents = SqlAlchemyOptInConsentRepository(session)
+    audit_log = SqlAlchemyAuditLogRepository(session)
+    service = OptInConsentService(users, consents, audit_log)
+
+    try:
+        await service.revoke_consent(user_id=user_id, actor_user_id=current_user.id)
+    except UserNotFound:
+        await session.commit()
+        raise _not_found("User") from None
+    except ConsentTargetNotAddressable:
+        await session.commit()
+        raise _consent_not_addressable() from None
+    except ConsentNotActive:
+        await session.commit()
+        raise _consent_not_active() from None
 
     await session.commit()
 

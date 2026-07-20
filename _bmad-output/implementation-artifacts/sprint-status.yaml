@@ -68,7 +68,7 @@ development_status:
   epic-3: in-progress
   3-1-manage-users-sales-teams: done
   3-2-manage-recipient-groups-channels: done
-  3-3-recipient-opt-in-consent-capture: backlog
+  3-3-recipient-opt-in-consent-capture: done
   3-4-concurrent-edit-conflict-detection: backlog
   epic-3-retrospective: optional
 

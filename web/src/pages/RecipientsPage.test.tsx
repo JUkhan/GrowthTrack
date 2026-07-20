@@ -14,6 +14,8 @@ const USER_ROW = {
   team_id: 't1',
   team_name: 'North Zone',
   version: 1,
+  consent_status: 'opted_in',
+  consent_recorded_at: '2026-07-01T10:00:00Z',
 }
 
 const TEAM_ROW = { id: 't1', name: 'North Zone', status: 'active', version: 1 }
@@ -110,6 +112,87 @@ describe('RecipientsPage', () => {
     expect(await screen.findByText('Karim')).toBeInTheDocument()
     expect(screen.getByText('+8801700000401')).toBeInTheDocument()
     expect(screen.getByText('North Zone')).toBeInTheDocument()
+  })
+
+  it('renders a Consent column badge per row from GET /users', async () => {
+    stubFetch({
+      users: [
+        USER_ROW,
+        {
+          id: 'u2',
+          name: 'Rahim',
+          mobile: '+8801700000402',
+          username: null,
+          role: 'sales_user',
+          status: 'active',
+          team_id: 't1',
+          team_name: 'North Zone',
+          version: 1,
+          consent_status: 'not_opted_in',
+          consent_recorded_at: null,
+        },
+      ],
+    })
+
+    renderRecipientsPage()
+
+    expect(await screen.findByText('Opted In')).toBeInTheDocument()
+    expect(screen.getByText('Not Opted In')).toBeInTheDocument()
+  })
+
+  it('seeds the edit dialog consent fields from the row', async () => {
+    stubFetch({})
+
+    renderRecipientsPage()
+    await screen.findByText('Karim')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+
+    expect(await screen.findAllByText('Opted In')).not.toHaveLength(0)
+  })
+
+  it('reloads Users via onConsentChanged after a consent action without closing the dialog', async () => {
+    let usersRequestCount = 0
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL, init?: RequestInit) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        const method = init?.method ?? 'GET'
+
+        if (url === '/auth/me') return Promise.resolve(new Response(null, { status: 200 }))
+        if (url === '/users' && method === 'GET') {
+          usersRequestCount += 1
+          return Promise.resolve(new Response(JSON.stringify([USER_ROW]), { status: 200 }))
+        }
+        if (url === '/teams' && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify([TEAM_ROW]), { status: 200 }))
+        }
+        if (url === '/recipient-lists' && method === 'GET') {
+          return Promise.resolve(new Response(JSON.stringify([]), { status: 200 }))
+        }
+        if (url === '/users/u1/opt-in-consent' && method === 'DELETE') {
+          return Promise.resolve(new Response(null, { status: 204 }))
+        }
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }),
+    )
+
+    renderRecipientsPage()
+    await screen.findByText('Karim')
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Edit' }))
+    await screen.findByRole('button', { name: 'Revoke Consent' })
+    const countBeforeAction = usersRequestCount
+
+    await user.click(screen.getByRole('button', { name: 'Revoke Consent' }))
+    const confirmButtons = await screen.findAllByRole('button', { name: 'Revoke' })
+    await user.click(confirmButtons[confirmButtons.length - 1])
+
+    await waitFor(() => {
+      expect(usersRequestCount).toBeGreaterThan(countBeforeAction)
+    })
+    expect(screen.getByText('Edit User')).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: 'Save' })).toBeInTheDocument()
   })
 
   it('shows the empty state with a primary action when there are zero Users', async () => {

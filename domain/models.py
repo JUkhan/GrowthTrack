@@ -111,6 +111,15 @@ class RecipientList:
 
 
 @dataclass
+class OptInConsent:
+    id: uuid.UUID
+    user_id: uuid.UUID
+    mobile: str
+    granted_at: datetime
+    revoked_at: datetime | None = None
+
+
+@dataclass
 class SalesData:
     id: uuid.UUID
     date: date  # business date, not datetime — see Dev Notes on timezone handling

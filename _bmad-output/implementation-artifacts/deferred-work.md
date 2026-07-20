@@ -72,3 +72,7 @@
 - **No pagination on `GET /users`/`GET /teams`** [api/recipients/routes.py:199-208,305-311] — Reason: consistent with this story's explicit "never hide rows" requirement; a real future scaling concern but not this story's scope. Revisit once the directory grows large enough to matter.
 - **No test for a non-sole Administrator deactivating their own account** [tests/api/test_recipients_routes.py] — Reason: coverage gap only; the guard behavior itself is correct and tested for the sole-admin case.
 - **No client-side (or server-side) format validation on the `mobile` field** [api/recipients/routes.py:36-46] — Reason: needs a design decision (E.164? country-specific?) rather than guessing a format now; the directory's whole purpose is a WhatsApp-notification recipient list, so this matters but shouldn't be guessed at.
+
+## Deferred from: code review of 3-3-recipient-opt-in-consent-capture (2026-07-20)
+
+- **Consent grant/revoke handlers lack an unmount guard** [web/src/pages/UserFormDialog.tsx:95-137] — Reason: `handleSubmit` in the same component already lacks an `isMountedRef`-style guard (unlike `RecipientsPage.tsx`'s load functions, which do have one), so this is consistent with an existing gap in this file rather than a regression introduced by this diff.
