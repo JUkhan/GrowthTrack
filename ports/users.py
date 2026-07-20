@@ -35,6 +35,15 @@ class UserRepository(ABC):
     async def acquire_bootstrap_lock(self) -> None: ...
 
     @abstractmethod
+    async def acquire_administrator_removal_lock(self) -> None:
+        """Transaction-scoped advisory lock serializing concurrent
+        Administrator deactivate/delete requests — closes the TOCTOU race
+        flagged in Story 1.3's code review (two concurrent removals of two
+        different Administrators, both reading the same active-count before
+        either commits, could otherwise leave zero active Administrators)."""
+        ...
+
+    @abstractmethod
     async def increment_failed_login_count(self, user_id: uuid.UUID) -> int: ...
 
     @abstractmethod
@@ -48,3 +57,23 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def update_theme_preference(self, user_id: uuid.UUID, theme_preference: str) -> None: ...
+
+    @abstractmethod
+    async def get_by_mobile(self, mobile: str) -> Any: ...
+
+    @abstractmethod
+    async def list_all(self) -> list[Any]:
+        """ALL roles, ALL statuses — the Recipients directory (Story 3.1)
+        lists Administrators alongside Sales User/Manager rows so the
+        last-Administrator guard has something to protect on removal, and
+        never hides inactive rows (data-table convention: show, don't
+        silently drop)."""
+        ...
+
+    @abstractmethod
+    async def update_directory_fields(
+        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID
+    ) -> None: ...
+
+    @abstractmethod
+    async def deactivate(self, user_id: uuid.UUID) -> None: ...

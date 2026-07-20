@@ -54,7 +54,11 @@ class BootstrapRequest(BaseModel):
 
 class UserResponse(BaseModel):
     id: uuid.UUID
-    username: str
+    # Optional (Story 3.1): the type widened when `User.username` did, even
+    # though every route in this file only ever handles Administrators
+    # (always non-None in practice) — Sales User/Manager rows never reach
+    # these endpoints.
+    username: str | None
     role: str
     theme_preference: str
 

@@ -13,6 +13,8 @@ from fastapi.responses import JSONResponse
 
 from api.auth.routes import router as auth_router
 from api.dashboard.routes import router as dashboard_router
+from api.recipients.routes import teams_router as recipients_teams_router
+from api.recipients.routes import users_router as recipients_users_router
 from api.routes.health import router as health_router
 
 logging.basicConfig(level=logging.INFO)
@@ -66,3 +68,5 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(dashboard_router)
+app.include_router(recipients_users_router)
+app.include_router(recipients_teams_router)

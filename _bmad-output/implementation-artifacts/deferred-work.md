@@ -59,3 +59,11 @@
 ## Deferred from: code review of 2-4-prioritized-doctor-visit-list (2026-07-19)
 
 - **`list_all()` has no transactional/snapshot coordination with an in-progress `upsert_many()` ingestion batch** [adapters/persistence/doctors.py:80] — Reason: a concurrent read during a nightly ingestion run could observe a partially-updated snapshot. Pre-existing architectural pattern shared with `BrandPerformanceService`/`DashboardMetricsService` (same read-without-locking design across the codebase), not introduced by this diff. Revisit at the ingestion-locking level in a future story if Epic 4's Daily Report generation needs stronger consistency guarantees.
+
+## Deferred from: code review of 3-1-manage-users-sales-teams (2026-07-20)
+
+- **Optimistic-concurrency `version` column has no stale-write rejection on any update path** [domain/models.py, adapters/persistence/users.py:161-169, adapters/persistence/teams.py:83-89] — Reason: explicitly out of scope per this story's own Dev Notes and Completion Notes: Story 3.4 (Concurrent-Edit Conflict Detection) owns stale-write rejection; `version` is kept incrementing correctly so that story has real data to work against.
+- **Alembic `downgrade()` requires manually deleting Sales User/Manager rows before it can succeed** [alembic/versions/dba27c6b09b6_recipient_directory_users_and_teams.py] — Reason: explicitly documented as an intentional, accepted consequence in the migration's own downgrade docstring per this story's Task 1 instructions.
+- **No pagination on `GET /users`/`GET /teams`** [api/recipients/routes.py:199-208,305-311] — Reason: consistent with this story's explicit "never hide rows" requirement; a real future scaling concern but not this story's scope. Revisit once the directory grows large enough to matter.
+- **No test for a non-sole Administrator deactivating their own account** [tests/api/test_recipients_routes.py] — Reason: coverage gap only; the guard behavior itself is correct and tested for the sole-admin case.
+- **No client-side (or server-side) format validation on the `mobile` field** [api/recipients/routes.py:36-46] — Reason: needs a design decision (E.164? country-specific?) rather than guessing a format now; the directory's whole purpose is a WhatsApp-notification recipient list, so this matters but shouldn't be guessed at.

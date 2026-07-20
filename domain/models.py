@@ -24,6 +24,11 @@ class UserStatus(StrEnum):
     INACTIVE = "inactive"
 
 
+class TeamStatus(StrEnum):
+    ACTIVE = "active"
+    INACTIVE = "inactive"
+
+
 class ThemePreference(StrEnum):
     LIGHT = "light"
     DARK = "dark"
@@ -39,12 +44,18 @@ class ImportRunStatus(StrEnum):
 @dataclass
 class User:
     id: uuid.UUID
-    username: str
-    hashed_password: str
+    # Optional: an Administrator (Epic 1) has both; a Sales User/Manager
+    # roster entry (Story 3.1) has neither — they never authenticate to the
+    # portal (Addendum A5). See domain/recipients.py's Role-Handling Matrix.
+    username: str | None
+    hashed_password: str | None
     role: Role
     status: UserStatus
     version: int
     created_at: datetime
+    name: str | None = None
+    mobile: str | None = None
+    team_id: uuid.UUID | None = None
     failed_login_count: int = 0
     locked_until: datetime | None = None
     theme_preference: ThemePreference = ThemePreference.SYSTEM
@@ -75,6 +86,8 @@ class AuditLogEntry:
 class Team:
     id: uuid.UUID
     name: str
+    status: TeamStatus = TeamStatus.ACTIVE
+    version: int = 1
 
 
 @dataclass

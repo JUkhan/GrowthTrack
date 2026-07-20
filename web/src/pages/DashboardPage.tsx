@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import type { ReactElement } from 'react'
-import { Navigate, useNavigate } from 'react-router-dom'
+import { Navigate, Link as RouterLink, useNavigate } from 'react-router-dom'
 import Alert from '@mui/material/Alert'
 import Box from '@mui/material/Box'
 import Button from '@mui/material/Button'
 import Container from '@mui/material/Container'
+import Link from '@mui/material/Link'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
@@ -219,6 +220,9 @@ function DashboardPage() {
         <Typography variant="h4" component="h1" sx={{ flexGrow: 1 }}>
           Dashboard
         </Typography>
+        <Link component={RouterLink} to="/recipients">
+          Recipients
+        </Link>
         <Button variant="outlined" disabled={submitting} onClick={handleLogout}>
           Log out
         </Button>

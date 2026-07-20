@@ -13,6 +13,8 @@ export default defineConfig({
       '/auth': 'http://localhost:8000',
       '/dashboard/summary': 'http://localhost:8000',
       '/dashboard/brand-performance': 'http://localhost:8000',
+      '/users': 'http://localhost:8000',
+      '/teams': 'http://localhost:8000',
     },
   },
   test: {

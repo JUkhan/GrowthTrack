@@ -5,12 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, select, text, update
+from sqlalchemy import DateTime, ForeignKey, Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
-from adapters.persistence.advisory_locks import BOOTSTRAP_LOCK_KEY
+from adapters.persistence.advisory_locks import (
+    ADMINISTRATOR_REMOVAL_LOCK_KEY,
+    BOOTSTRAP_LOCK_KEY,
+)
 from adapters.persistence.database import Base
 from domain.models import Role, ThemePreference, User, UserStatus
 from ports.users import UserRepository
@@ -20,12 +23,23 @@ class UserModel(Base):
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
-    username: Mapped[str] = mapped_column(String, unique=True, nullable=False)
-    hashed_password: Mapped[str] = mapped_column(String, nullable=False)
+    # Nullable (Story 3.1): a Sales User/Manager roster entry has neither —
+    # they never authenticate to the portal (Addendum A5).
+    username: Mapped[str | None] = mapped_column(String, unique=True, nullable=True)
+    hashed_password: Mapped[str | None] = mapped_column(String, nullable=True)
     role: Mapped[str] = mapped_column(String, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
     version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    name: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Uniqueness enforced by a partial index (ix_users_mobile_active_uq,
+    # WHERE status = 'active') rather than a column-level constraint — a
+    # soft-deleted User's mobile is reusable by a new User (code review of
+    # Story 3.1, migration 17eb25555c26).
+    mobile: Mapped[str | None] = mapped_column(String, nullable=True)
+    team_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("teams.id"), nullable=True
+    )
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     theme_preference: Mapped[str] = mapped_column(String, nullable=False, default="system")
@@ -40,6 +54,9 @@ def _to_domain(row: UserModel) -> User:
         status=UserStatus(row.status),
         version=row.version,
         created_at=row.created_at,
+        name=row.name,
+        mobile=row.mobile,
+        team_id=row.team_id,
         failed_login_count=row.failed_login_count,
         locked_until=row.locked_until,
         theme_preference=ThemePreference(row.theme_preference),
@@ -70,6 +87,9 @@ class SqlAlchemyUserRepository(UserRepository):
                 status=user.status.value,
                 version=user.version,
                 created_at=user.created_at,
+                name=user.name,
+                mobile=user.mobile,
+                team_id=user.team_id,
             )
         )
 
@@ -91,6 +111,12 @@ class SqlAlchemyUserRepository(UserRepository):
         # Transaction-scoped: releases automatically on commit/rollback.
         await self._session.execute(
             text("SELECT pg_advisory_xact_lock(:key)"), {"key": BOOTSTRAP_LOCK_KEY}
+        )
+
+    async def acquire_administrator_removal_lock(self) -> None:
+        # Transaction-scoped: releases automatically on commit/rollback.
+        await self._session.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": ADMINISTRATOR_REMOVAL_LOCK_KEY}
         )
 
     async def increment_failed_login_count(self, user_id: uuid.UUID) -> int:
@@ -131,5 +157,38 @@ class SqlAlchemyUserRepository(UserRepository):
             update(UserModel)
             .where(UserModel.id == user_id)
             .values(theme_preference=theme_preference)
+        )
+        await self._session.execute(stmt)
+
+    async def get_by_mobile(self, mobile: str) -> User | None:
+        # Active-only (code review of Story 3.1): a soft-deleted User's
+        # mobile is reusable, matching ix_users_mobile_active_uq.
+        stmt = select(UserModel).where(
+            UserModel.mobile == mobile, UserModel.status == UserStatus.ACTIVE.value
+        )
+        result = await self._session.execute(stmt)
+        row = result.scalar_one_or_none()
+        return _to_domain(row) if row is not None else None
+
+    async def list_all(self) -> list[User]:
+        stmt = select(UserModel).order_by(UserModel.created_at)
+        result = await self._session.execute(stmt)
+        return [_to_domain(row) for row in result.scalars().all()]
+
+    async def update_directory_fields(
+        self, user_id: uuid.UUID, name: str, mobile: str, team_id: uuid.UUID
+    ) -> None:
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(name=name, mobile=mobile, team_id=team_id, version=UserModel.version + 1)
+        )
+        await self._session.execute(stmt)
+
+    async def deactivate(self, user_id: uuid.UUID) -> None:
+        stmt = (
+            update(UserModel)
+            .where(UserModel.id == user_id)
+            .values(status=UserStatus.INACTIVE.value, version=UserModel.version + 1)
         )
         await self._session.execute(stmt)

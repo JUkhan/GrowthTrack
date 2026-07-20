@@ -6,7 +6,15 @@ import Button from '@mui/material/Button'
 import { renderWithTheme } from '../testUtils/renderWithTheme'
 import ConfirmationDialog from './ConfirmationDialog'
 
-function Harness({ danger = false, onConfirm = () => {} }: { danger?: boolean; onConfirm?: () => void }) {
+function Harness({
+  danger = false,
+  onConfirm = () => {},
+  submitting = false,
+}: {
+  danger?: boolean
+  onConfirm?: () => void
+  submitting?: boolean
+}) {
   const [open, setOpen] = useState(false)
   return (
     <>
@@ -17,6 +25,7 @@ function Harness({ danger = false, onConfirm = () => {} }: { danger?: boolean; o
         consequence="This removes Dr. Rahman's territory assignment. Sales reps in Chattogram North will stop seeing this entry."
         confirmLabel="Remove"
         danger={danger}
+        submitting={submitting}
         onConfirm={onConfirm}
         onCancel={() => setOpen(false)}
       />
@@ -54,6 +63,16 @@ describe('ConfirmationDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Delete recipient' }))
 
     expect(screen.getByRole('button', { name: 'Remove' })).not.toHaveClass('MuiButton-colorError')
+  })
+
+  it('disables Cancel and the confirm button while submitting is true', async () => {
+    const user = userEvent.setup()
+    renderWithTheme(<Harness submitting />)
+
+    await user.click(screen.getByRole('button', { name: 'Delete recipient' }))
+
+    expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'Remove' })).toBeDisabled()
   })
 
   it('returns focus to the trigger button after the dialog closes', async () => {

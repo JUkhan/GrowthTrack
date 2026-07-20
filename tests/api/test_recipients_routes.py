@@ -1,0 +1,434 @@
+import uuid
+
+
+async def _login_as_admin(client, seed_user, username: str = "admin") -> None:
+    _, password = await seed_user(username=username)
+    response = await client.post("/auth/login", json={"username": username, "password": password})
+    assert response.status_code == 200
+
+
+async def _create_team(client, name: str = "North Zone") -> str:
+    response = await client.post("/teams", json={"name": name})
+    assert response.status_code == 201
+    return response.json()["id"]
+
+
+# --- Auth enforcement (AD-8) --------------------------------------------------
+
+
+async def test_list_users_without_cookie_returns_401(client):
+    response = await client.get("/users")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_list_teams_without_cookie_returns_401(client):
+    response = await client.get("/teams")
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+# --- POST /users ---------------------------------------------------------------
+
+
+async def test_create_user_succeeds_and_is_audit_logged(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+
+    response = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000201",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "Karim"
+    assert body["mobile"] == "+8801700000201"
+    assert body["role"] == "sales_user"
+    assert body["status"] == "active"
+    assert body["team_id"] == team_id
+    assert body["team_name"] == "North Zone"
+    assert body["username"] is None
+
+
+async def test_create_user_with_administrator_role_is_rejected_by_request_validation(
+    client, seed_user
+):
+    """The Literal["sales_user","manager"] type on the request body is the
+    first line of defense (AC #5) — "administrator" fails standard Pydantic
+    validation before the route body, let alone the domain layer, ever runs."""
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+
+    response = await client.post(
+        "/users",
+        json={
+            "name": "Someone",
+            "mobile": "+8801700000202",
+            "role": "administrator",
+            "team_id": team_id,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "validation_error"
+
+
+async def test_create_user_with_a_taken_mobile_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000203",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    response = await client.post(
+        "/users",
+        json={"name": "Other", "mobile": "+8801700000203", "role": "manager", "team_id": team_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "mobile_taken"
+
+
+async def test_create_user_with_a_nonexistent_team_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000214",
+            "role": "sales_user",
+            "team_id": str(uuid.uuid4()),
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
+
+
+async def test_create_user_with_an_inactive_team_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    await client.delete(f"/teams/{team_id}")
+
+    response = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000215",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "team_inactive"
+
+
+async def test_removed_users_mobile_becomes_available_for_a_new_user(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000216",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+    await client.delete(f"/users/{user_id}")
+
+    response = await client.post(
+        "/users",
+        json={
+            "name": "Replacement",
+            "mobile": "+8801700000216",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["mobile"] == "+8801700000216"
+
+
+# --- GET /users ------------------------------------------------------------------
+
+
+async def test_list_users_includes_administrators_and_sales_users(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000204",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    response = await client.get("/users")
+
+    assert response.status_code == 200
+    roles = {row["role"] for row in response.json()}
+    assert "administrator" in roles
+    assert "sales_user" in roles
+
+
+# --- GET /users/mobile-availability -----------------------------------------------
+
+
+async def test_mobile_availability_is_true_for_an_unused_mobile(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.get("/users/mobile-availability", params={"mobile": "+8801700000205"})
+
+    assert response.status_code == 200
+    assert response.json() == {"available": True}
+
+
+async def test_mobile_availability_is_false_for_a_taken_mobile(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000206",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+
+    response = await client.get("/users/mobile-availability", params={"mobile": "+8801700000206"})
+
+    assert response.json() == {"available": False}
+
+
+async def test_mobile_availability_excludes_the_user_being_edited(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000207",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+
+    response = await client.get(
+        "/users/mobile-availability",
+        params={"mobile": "+8801700000207", "exclude_user_id": user_id},
+    )
+
+    assert response.json() == {"available": True}
+
+
+# --- PATCH /users/{id} ----------------------------------------------------------
+
+
+async def test_update_user_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    other_team_id = await _create_team(client, "South Zone")
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000208",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/users/{user_id}",
+        json={"name": "Karim Updated", "mobile": "+8801700000209", "team_id": other_team_id},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Karim Updated"
+    assert body["mobile"] == "+8801700000209"
+    assert body["team_id"] == other_team_id
+
+
+async def test_update_user_with_a_mobile_taken_by_another_user_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    await client.post(
+        "/users",
+        json={"name": "A", "mobile": "+8801700000210", "role": "sales_user", "team_id": team_id},
+    )
+    created = await client.post(
+        "/users",
+        json={"name": "B", "mobile": "+8801700000211", "role": "sales_user", "team_id": team_id},
+    )
+    user_id = created.json()["id"]
+
+    response = await client.patch(
+        f"/users/{user_id}",
+        json={"name": "B", "mobile": "+8801700000210", "team_id": team_id},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "mobile_taken"
+
+
+async def test_update_user_on_an_administrator_returns_400(client, seed_user):
+    admin, _ = await seed_user(username="admin")
+    await _login_as_admin(client, seed_user, username="admin2")
+    team_id = await _create_team(client)
+
+    response = await client.patch(
+        f"/users/{admin.id}",
+        json={"name": "New Name", "mobile": "+8801700000212", "team_id": team_id},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "administrator_not_editable"
+
+
+# --- DELETE /users/{id} ---------------------------------------------------------
+
+
+async def test_remove_user_deactivates_a_sales_user(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client)
+    created = await client.post(
+        "/users",
+        json={
+            "name": "Karim",
+            "mobile": "+8801700000213",
+            "role": "sales_user",
+            "team_id": team_id,
+        },
+    )
+    user_id = created.json()["id"]
+
+    response = await client.delete(f"/users/{user_id}")
+
+    assert response.status_code == 204
+    listed = await client.get("/users")
+    row = next(row for row in listed.json() if row["id"] == user_id)
+    assert row["status"] == "inactive"
+
+
+async def test_remove_the_sole_active_administrator_returns_409(client, seed_user):
+    admin, password = await seed_user(username="admin")
+    login = await client.post("/auth/login", json={"username": "admin", "password": password})
+    assert login.status_code == 200
+
+    response = await client.delete(f"/users/{admin.id}")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "last_administrator"
+
+
+# --- POST /teams -----------------------------------------------------------------
+
+
+async def test_create_team_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post("/teams", json={"name": "East Zone"})
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "East Zone"
+    assert body["status"] == "active"
+    assert body["version"] == 1
+
+
+async def test_create_team_with_a_taken_name_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await client.post("/teams", json={"name": "East Zone"})
+
+    response = await client.post("/teams", json={"name": "East Zone"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "team_name_taken"
+
+
+# --- GET /teams --------------------------------------------------------------------
+
+
+async def test_list_teams_returns_created_teams(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await client.post("/teams", json={"name": "East Zone"})
+
+    response = await client.get("/teams")
+
+    assert response.status_code == 200
+    names = {row["name"] for row in response.json()}
+    assert "East Zone" in names
+
+
+# --- PATCH /teams/{id} -------------------------------------------------------------
+
+
+async def test_update_team_succeeds(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "East Zone")
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "Eastern Zone"})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "Eastern Zone"
+
+
+async def test_update_team_to_a_taken_name_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await _create_team(client, "East Zone")
+    team_id = await _create_team(client, "West Zone")
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "East Zone"})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "team_name_taken"
+
+
+# --- DELETE /teams/{id} -------------------------------------------------------------
+
+
+async def test_removed_teams_name_becomes_available_for_a_new_team(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "East Zone")
+    await client.delete(f"/teams/{team_id}")
+
+    response = await client.post("/teams", json={"name": "East Zone"})
+
+    assert response.status_code == 201
+
+
+async def test_remove_team_deactivates_it(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "East Zone")
+
+    response = await client.delete(f"/teams/{team_id}")
+
+    assert response.status_code == 204
+    listed = await client.get("/teams")
+    row = next(row for row in listed.json() if row["id"] == team_id)
+    assert row["status"] == "inactive"

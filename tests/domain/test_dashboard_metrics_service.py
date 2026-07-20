@@ -56,6 +56,24 @@ class FakeTeamRepository(TeamRepository):
     async def list_all(self) -> list[tuple[uuid.UUID, str]]:
         return self._teams
 
+    async def add(self, team_id: uuid.UUID, name: str) -> None:
+        raise NotImplementedError
+
+    async def get_by_id(self, team_id: uuid.UUID) -> None:
+        raise NotImplementedError
+
+    async def get_by_name(self, name: str) -> None:
+        raise NotImplementedError
+
+    async def list_all_full(self) -> list:
+        raise NotImplementedError
+
+    async def update_name(self, team_id: uuid.UUID, name: str) -> None:
+        raise NotImplementedError
+
+    async def deactivate(self, team_id: uuid.UUID) -> None:
+        raise NotImplementedError
+
 
 class FakeImportRunRepository(ImportRunRepository):
     def __init__(self, last_successful: datetime | None = None) -> None:

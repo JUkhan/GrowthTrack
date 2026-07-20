@@ -13,6 +13,7 @@ interface ConfirmationDialogProps {
   onConfirm: () => void
   onCancel: () => void
   danger?: boolean
+  submitting?: boolean
 }
 
 // `consequence` is always the caller's real, specific text (AC #11) — this
@@ -27,6 +28,7 @@ function ConfirmationDialog({
   onConfirm,
   onCancel,
   danger = false,
+  submitting = false,
 }: ConfirmationDialogProps) {
   return (
     <Dialog open={open} onClose={onCancel}>
@@ -35,11 +37,14 @@ function ConfirmationDialog({
         <DialogContentText>{consequence}</DialogContentText>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onCancel}>Cancel</Button>
+        <Button onClick={onCancel} disabled={submitting}>
+          Cancel
+        </Button>
         <Button
           onClick={onConfirm}
           variant="contained"
           color={danger ? 'error' : 'primary'}
+          disabled={submitting}
         >
           {confirmLabel}
         </Button>
