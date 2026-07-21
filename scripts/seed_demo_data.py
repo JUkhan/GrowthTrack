@@ -32,11 +32,21 @@ from adapters.persistence.consent import SqlAlchemyOptInConsentRepository
 from adapters.persistence.database import create_session_factory
 from adapters.persistence.doctors import SqlAlchemyDoctorRepository
 from adapters.persistence.import_runs import SqlAlchemyImportRunRepository
+from adapters.persistence.notifications import SqlAlchemyMessageTemplateRepository
 from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
-from domain.models import BrandPerformance, Doctor, RecipientListKind, Role, SalesData, User, UserStatus
+from domain.models import (
+    BrandPerformance,
+    Doctor,
+    MessageTemplate,
+    RecipientListKind,
+    Role,
+    SalesData,
+    User,
+    UserStatus,
+)
 
 random.seed(20260720)  # deterministic across re-runs
 
@@ -121,6 +131,31 @@ async def _seed_recipient_lists(
         list_id = uuid.uuid4()
         await recipient_lists_repo.add(list_id, channel_name, RecipientListKind.CHANNEL)
         await recipient_lists_repo.replace_members(list_id, [u.id for u in managers])
+
+
+async def _seed_message_templates(templates_repo: SqlAlchemyMessageTemplateRepository) -> None:
+    # No Template-management UI exists yet (approval happens in
+    # Twilio/Meta's console per the architecture spine's Deferred list) —
+    # this placeholder Content SID must be swapped for a real one from the
+    # Twilio Console before any real send.
+    name = "Target Revision Notice"
+    if await templates_repo.get_by_name(name) is not None:
+        return
+    await templates_repo.add(
+        MessageTemplate(
+            id=uuid.uuid4(),
+            name=name,
+            twilio_content_sid="HXdemoplaceholder0000000000000",
+            variable_slots=["team_name", "new_target", "effective_date"],
+            body_preview_template=(
+                "GrowthTrack Notification\n\n"
+                "{team_name} — target update\n\n"
+                "{new_target}.\n\n"
+                "Effective: {effective_date}"
+            ),
+            created_at=datetime.now(UTC),
+        )
+    )
 
 
 async def _seed_consents(
@@ -227,6 +262,7 @@ async def main() -> None:
         teams_repo = SqlAlchemyTeamRepository(session)
         users_repo = SqlAlchemyUserRepository(session)
         recipient_lists_repo = SqlAlchemyRecipientListRepository(session)
+        templates_repo = SqlAlchemyMessageTemplateRepository(session)
         consents_repo = SqlAlchemyOptInConsentRepository(session)
         sales_repo = SqlAlchemySalesDataRepository(session)
         brand_repo = SqlAlchemyBrandPerformanceRepository(session)
@@ -238,6 +274,7 @@ async def main() -> None:
         team_ids = await _seed_teams(teams_repo)
         roster_by_team, managers, reps = await _seed_roster(users_repo, team_ids)
         await _seed_recipient_lists(recipient_lists_repo, roster_by_team, managers)
+        await _seed_message_templates(templates_repo)
         await _seed_consents(consents_repo, managers + reps)
 
         records_processed = await _seed_sales_data(sales_repo, team_ids, today)

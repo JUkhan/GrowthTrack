@@ -16,6 +16,9 @@ export default defineConfig({
       '/users': 'http://localhost:8000',
       '/teams': 'http://localhost:8000',
       '/recipient-lists': 'http://localhost:8000',
+      '/dashboard/notification-status': 'http://localhost:8000',
+      '/notifications': 'http://localhost:8000',
+      '/message-templates': 'http://localhost:8000',
     },
   },
   test: {

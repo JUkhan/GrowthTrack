@@ -64,6 +64,13 @@ function brandPerformanceResponse(): Response {
   )
 }
 
+// Independent fetch from /dashboard/summary (Story 4.1, AC #8) — every mock
+// below stubs it explicitly to "no sends yet", same reasoning as
+// brandPerformanceResponse() above.
+function notificationStatusResponse(): Response {
+  return new Response(JSON.stringify({ status: null, updated_at: null }), { status: 200 })
+}
+
 function stubFetch(summaryResponse: () => Response, meOk = true) {
   vi.stubGlobal(
     'fetch',
@@ -77,6 +84,9 @@ function stubFetch(summaryResponse: () => Response, meOk = true) {
       }
       if (url === '/dashboard/brand-performance') {
         return Promise.resolve(brandPerformanceResponse())
+      }
+      if (url === '/dashboard/notification-status') {
+        return Promise.resolve(notificationStatusResponse())
       }
       return Promise.resolve(new Response(null, { status: 200 }))
     }),
@@ -189,7 +199,7 @@ describe('DashboardPage', () => {
     expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorDefault')
   })
 
-  it('always shows "No sends yet" for Notification Status regardless of the mocked response', async () => {
+  it('shows "No sends yet" for Notification Status before any Manual Notification has been sent', async () => {
     stubFetch(
       () =>
         new Response(
@@ -201,6 +211,91 @@ describe('DashboardPage', () => {
     renderDashboardPage()
 
     expect(await screen.findByText('No sends yet')).toBeInTheDocument()
+  })
+
+  function stubFetchWithNotificationStatus(notificationStatusBody: unknown) {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url === '/auth/me') {
+          return Promise.resolve(new Response(null, { status: 200 }))
+        }
+        if (url === '/dashboard/summary') {
+          return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+        }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(brandPerformanceResponse())
+        }
+        if (url === '/dashboard/notification-status') {
+          return Promise.resolve(new Response(JSON.stringify(notificationStatusBody), { status: 200 }))
+        }
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }),
+    )
+  }
+
+  it('maps a "delivered" notification status to the success/Delivered badge', async () => {
+    stubFetchWithNotificationStatus({ status: 'delivered', updated_at: '2026-07-21T08:00:00Z' })
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('Delivered')
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorSuccess')
+  })
+
+  it('maps a "retrying" notification status to the warning/Retrying badge', async () => {
+    stubFetchWithNotificationStatus({ status: 'retrying', updated_at: '2026-07-21T08:00:00Z' })
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('Retrying')
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorWarning')
+  })
+
+  it('maps a "failed" notification status to the error/Failed badge', async () => {
+    stubFetchWithNotificationStatus({ status: 'failed', updated_at: '2026-07-21T08:00:00Z' })
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('Failed')
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorError')
+  })
+
+  it('maps a "queued" notification status to the neutral/Queued badge', async () => {
+    stubFetchWithNotificationStatus({ status: 'queued', updated_at: '2026-07-21T08:00:00Z' })
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('Queued')
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorDefault')
+  })
+
+  it('shows "Unable to load" for Notification Status when the fetch fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((input: RequestInfo | URL) => {
+        const url = typeof input === 'string' ? input : input.toString()
+        if (url === '/auth/me') {
+          return Promise.resolve(new Response(null, { status: 200 }))
+        }
+        if (url === '/dashboard/summary') {
+          return Promise.resolve(new Response(JSON.stringify(summaryBody()), { status: 200 }))
+        }
+        if (url === '/dashboard/brand-performance') {
+          return Promise.resolve(brandPerformanceResponse())
+        }
+        if (url === '/dashboard/notification-status') {
+          return Promise.resolve(new Response(null, { status: 500 }))
+        }
+        return Promise.resolve(new Response(null, { status: 200 }))
+      }),
+    )
+
+    renderDashboardPage()
+
+    const badge = await screen.findByText('Unable to load')
+    expect(badge.closest('.MuiChip-root')).toHaveClass('MuiChip-colorWarning')
   })
 
   it('renders "—" for Achievement % and Growth % when the API returns null (fresh company DB)', async () => {
@@ -251,6 +346,9 @@ describe('DashboardPage', () => {
         }
         if (url === '/dashboard/brand-performance') {
           return Promise.resolve(brandPerformanceResponse())
+        }
+        if (url === '/dashboard/notification-status') {
+          return Promise.resolve(notificationStatusResponse())
         }
         return Promise.resolve(new Response(null, { status: 200 }))
       }),

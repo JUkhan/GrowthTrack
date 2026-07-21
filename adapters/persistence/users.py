@@ -204,3 +204,8 @@ class SqlAlchemyUserRepository(UserRepository):
         stmt = select(UserModel).where(UserModel.id.in_(user_ids))
         result = await self._session.execute(stmt)
         return [_to_domain(row) for row in result.scalars().all()]
+
+    async def list_by_team_id(self, team_id: uuid.UUID) -> list[User]:
+        stmt = select(UserModel).where(UserModel.team_id == team_id)
+        result = await self._session.execute(stmt)
+        return [_to_domain(row) for row in result.scalars().all()]

@@ -9,6 +9,8 @@ import Link from '@mui/material/Link'
 import Stack from '@mui/material/Stack'
 import Typography from '@mui/material/Typography'
 import AccessTimeIcon from '@mui/icons-material/AccessTime'
+import CheckCircleIcon from '@mui/icons-material/CheckCircle'
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutlineOutlined'
 import NotificationsNoneIcon from '@mui/icons-material/NotificationsNone'
 import WarningAmberIcon from '@mui/icons-material/WarningAmber'
 import { apiFetch } from '../api/authClient'
@@ -45,6 +47,43 @@ interface FreshnessBadge {
   status: 'neutral' | 'warning'
   icon: ReactElement
   label: string
+}
+
+interface NotificationStatusApi {
+  status: 'queued' | 'sending' | 'delivered' | 'retrying' | 'failed' | 'failed_retryable' | null
+  updated_at: string | null
+}
+
+interface NotificationStatusBadge {
+  status: 'success' | 'warning' | 'error' | 'neutral'
+  icon: ReactElement
+  label: string
+}
+
+function notificationStatusBadge(
+  data: NotificationStatusApi | null,
+  hasError: boolean,
+): NotificationStatusBadge {
+  if (hasError) {
+    return { status: 'warning', icon: <WarningAmberIcon />, label: 'Unable to load' }
+  }
+  if (data === null || data.status === null) {
+    return { status: 'neutral', icon: <NotificationsNoneIcon />, label: 'No sends yet' }
+  }
+  switch (data.status) {
+    case 'delivered':
+      return { status: 'success', icon: <CheckCircleIcon />, label: 'Delivered' }
+    case 'retrying':
+      return { status: 'warning', icon: <WarningAmberIcon />, label: 'Retrying' }
+    case 'failed':
+    case 'failed_retryable':
+      return { status: 'error', icon: <ErrorOutlineIcon />, label: 'Failed' }
+    case 'queued':
+      return { status: 'neutral', icon: <NotificationsNoneIcon />, label: 'Queued' }
+    case 'sending':
+    default:
+      return { status: 'neutral', icon: <NotificationsNoneIcon />, label: 'Sending' }
+  }
 }
 
 function formatDhakaTime(iso: string): string {
@@ -88,6 +127,8 @@ function DashboardPage() {
   const [brandPerformance, setBrandPerformance] = useState<BrandPerformanceSummary | null>(null)
   const [brandPerformanceError, setBrandPerformanceError] = useState(false)
   const [brandPerformanceRetryCount, setBrandPerformanceRetryCount] = useState(0)
+  const [notificationStatus, setNotificationStatus] = useState<NotificationStatusApi | null>(null)
+  const [notificationStatusError, setNotificationStatusError] = useState(false)
   const navigate = useNavigate()
   const { resetPreference } = useThemeMode()
 
@@ -181,6 +222,37 @@ function DashboardPage() {
     }
   }, [session.kind, brandPerformanceRetryCount])
 
+  // Independent from every other fetch above (Story 4.1 AC #8) — its own
+  // effect, same fetch-on-mount shape as Brand Performance's.
+  useEffect(() => {
+    if (session.kind !== 'authenticated') return
+    let cancelled = false
+    setNotificationStatusError(false)
+
+    apiFetch('/dashboard/notification-status')
+      .then(async (response) => {
+        if (cancelled) return
+        if (!response.ok) {
+          setNotificationStatusError(true)
+          return
+        }
+        const body = (await response.json()) as NotificationStatusApi
+        if (!cancelled) {
+          setNotificationStatus(body)
+          setNotificationStatusError(false)
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setNotificationStatusError(true)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [session.kind])
+
   async function handleLogout() {
     setSubmitting(true)
     try {
@@ -225,6 +297,9 @@ function DashboardPage() {
         <Typography variant="h4" component="h1" sx={{ flexGrow: 1 }}>
           Dashboard
         </Typography>
+        <Link component={RouterLink} to="/notifications/compose">
+          Notifications
+        </Link>
         <Link component={RouterLink} to="/recipients">
           Recipients
         </Link>
@@ -300,7 +375,9 @@ function DashboardPage() {
           label="Notification Status"
           value={
             loading ? null : (
-              <StatusBadge status="neutral" icon={<NotificationsNoneIcon />} label="No sends yet" />
+              <StatusBadge
+                {...notificationStatusBadge(notificationStatus, notificationStatusError)}
+              />
             )
           }
           loading={loading}

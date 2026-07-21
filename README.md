@@ -48,6 +48,37 @@ docker/certs/generate-dev-cert.sh   # local-only self-signed TLS cert
 docker compose -f docker/docker-compose.yml --env-file .env up --build
 ```
 
+### Seed demo data
+
+Populates a fresh environment with Teams, a Sales User/Manager roster,
+RecipientLists (with membership), opt-in consents, a demo `MessageTemplate`,
+a full year-to-date SalesData time series, a BrandPerformance snapshot, a
+Doctor snapshot, and one succeeded ImportRun — everything the Dashboard,
+Recipients, Notifications, and Doctor Visit List screens read from. Does
+not create an Administrator account (that only comes from the bootstrap
+flow); requires migrations to already be applied (`uv run alembic upgrade
+head`).
+
+```
+uv run python -m scripts.seed_demo_data
+```
+
+Safe to re-run — Teams/RecipientLists/the demo template are looked up by
+name and roster Users by mobile before creating anything new, and
+SalesData/BrandPerformance/Doctors upsert in place. The seeded
+`MessageTemplate`'s `twilio_content_sid` is a placeholder — swap in a real
+Content SID from the Twilio Console before sending a real WhatsApp message
+through it.
+
+**Inside the Docker Compose stack:** the `api`/`scheduler` images bundle
+`scripts/`, so once the stack is up (`docker compose ... up --build`) and
+the `api` service is healthy (migrations have run), exec into it directly —
+no separate `uv`/Python install needed on the host:
+
+```
+docker compose -f docker/docker-compose.yml --env-file .env exec api python -m scripts.seed_demo_data
+```
+
 ## Guardrail
 
 The source tree, Docker Compose deployment topology, and CI configuration are

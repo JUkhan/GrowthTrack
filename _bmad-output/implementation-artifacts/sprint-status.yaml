@@ -41,7 +41,7 @@
 # - Retrospective appends its action items to action_items; sprint-status surfaces open ones
 
 generated: 2026-07-14
-last_updated: 2026-07-20
+last_updated: 2026-07-21
 project: GrowthTrack
 project_key: NOKEY
 tracking_system: file-system
@@ -72,8 +72,8 @@ development_status:
   3-4-concurrent-edit-conflict-detection: done
   epic-3-retrospective: optional
 
-  epic-4: backlog
-  4-1-compose-send-manual-notification: backlog
+  epic-4: in-progress
+  4-1-compose-send-manual-notification: done
   4-2-automated-daily-report-generation-send: backlog
   4-3-delivery-status-webhook-automatic-retry: backlog
   4-4-daily-report-schedule-configuration: backlog

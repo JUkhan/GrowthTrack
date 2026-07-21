@@ -22,6 +22,13 @@ async def _clean_tables() -> AsyncIterator[None]:
         # split) has DML grants only, no TRUNCATE/DDL rights.
         # password_reset_tokens.user_id carries a ForeignKey("users.id"), so
         # it must be deleted before users or the FK constraint rejects the delete.
+        # notification_deliveries/notification_targets both carry FKs to
+        # notifications.id (and to users.id) — children before the
+        # notifications/message_templates/users deletes below (Story 4.1).
+        await conn.execute(text("DELETE FROM notification_deliveries"))
+        await conn.execute(text("DELETE FROM notification_targets"))
+        await conn.execute(text("DELETE FROM notifications"))
+        await conn.execute(text("DELETE FROM message_templates"))
         await conn.execute(text("DELETE FROM audit_log_entries"))
         await conn.execute(text("DELETE FROM password_reset_tokens"))
         # recipient_list_members has an FK to users.id, same reasoning

@@ -25,6 +25,7 @@ COPY domain/ domain/
 COPY ports/ ports/
 COPY adapters/ adapters/
 COPY scheduler/ scheduler/
+COPY scripts/ scripts/
 COPY alembic/ alembic/
 COPY alembic.ini config.py ./
 

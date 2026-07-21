@@ -87,3 +87,10 @@ class UserRepository(ABC):
 
     @abstractmethod
     async def get_many_by_ids(self, user_ids: list[uuid.UUID]) -> list[Any]: ...
+
+    @abstractmethod
+    async def list_by_team_id(self, team_id: uuid.UUID) -> list[Any]:
+        """Teams have no member-join-table — membership is ``User.team_id``.
+        Used by recipient resolution (Story 4.1) to expand a selected Team
+        into its member Users."""
+        ...

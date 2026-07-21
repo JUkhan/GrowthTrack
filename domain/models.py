@@ -51,6 +51,28 @@ class ImportRunStatus(StrEnum):
     FAILED = "failed"
 
 
+class NotificationType(StrEnum):
+    MANUAL = "manual"
+    SCHEDULED = "scheduled"
+
+
+class DeliveryStatus(StrEnum):
+    QUEUED = "queued"
+    SENDING = "sending"
+    DELIVERED = "delivered"
+    RETRYING = "retrying"
+    FAILED = "failed"
+    # Story 4.3-only outcome — included now so AD-2's claim SQL can name it
+    # in its WHERE clause without a later schema migration.
+    FAILED_RETRYABLE = "failed_retryable"
+
+
+class TargetType(StrEnum):
+    USER = "user"
+    TEAM = "team"
+    RECIPIENT_LIST = "recipient_list"
+
+
 @dataclass
 class User:
     id: uuid.UUID
@@ -157,3 +179,63 @@ class ImportRun:
     completed_at: datetime | None = None
     records_processed: int = 0
     records_rejected: int = 0
+
+
+@dataclass
+class MessageTemplate:
+    id: uuid.UUID
+    name: str
+    twilio_content_sid: str
+    # Order is the positional mapping to Twilio's content_variables keys
+    # ("1", "2", ...) — see adapters/whatsapp_twilio/sender.py.
+    variable_slots: list[str]
+    # Human-readable text with {slot_name} placeholders (Python str.format),
+    # used purely for the composer's local live-preview render — Twilio's
+    # Content API has no "render me the text" call.
+    body_preview_template: str
+    created_at: datetime
+
+
+@dataclass
+class Notification:
+    id: uuid.UUID
+    notification_type: NotificationType
+    template_id: uuid.UUID
+    created_by_user_id: uuid.UUID
+    created_at: datetime
+
+
+@dataclass
+class NotificationTarget:
+    id: uuid.UUID
+    notification_id: uuid.UUID
+    target_type: TargetType
+    target_id: uuid.UUID
+
+
+@dataclass
+class NotificationDelivery:
+    id: uuid.UUID
+    notification_id: uuid.UUID
+    # Denormalized onto the delivery row (not just joined from Notification)
+    # because Postgres partial-unique-index predicates can't reference a
+    # joined table (AD-2).
+    notification_type: NotificationType
+    recipient_user_id: uuid.UUID
+    # Stays None for Manual sends — only Scheduled/Story 4.2 populates it.
+    operational_day: date | None
+    status: DeliveryStatus
+    attempt_count: int
+    provider_message_sid: str | None
+    failure_reason: str | None
+    created_at: datetime
+    updated_at: datetime
+
+
+@dataclass
+class NotificationStatusSummary:
+    # Aggregate view of the most recent Notification's overall outcome —
+    # worst-status-wins across all of its NotificationDelivery rows (AC #8),
+    # so one late per-recipient failure/success can't hide the others.
+    status: DeliveryStatus
+    updated_at: datetime

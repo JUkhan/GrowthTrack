@@ -12,12 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.brand_performance import SqlAlchemyBrandPerformanceRepository
 from adapters.persistence.import_runs import SqlAlchemyImportRunRepository
+from adapters.persistence.notifications import SqlAlchemyNotificationDeliveryRepository
 from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from api.auth.dependencies import get_current_user, get_db
 from config import get_settings
 from domain.metrics import BrandEntry, BrandPerformanceService, DashboardMetricsService
 from domain.models import User
+from domain.notifications import NotificationStatusService
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -113,3 +115,24 @@ async def brand_performance(
         low_performing_brands=[_to_response(e) for e in result.low_performing_brands],
         focus_brands=[_to_response(e) for e in result.focus_brands],
     )
+
+
+class NotificationStatusResponse(BaseModel):
+    # None means "no sends yet" (the tile's original placeholder state).
+    status: str | None
+    updated_at: datetime | None
+
+
+# Separate endpoint, not bundled into GET /dashboard/summary — mirrors this
+# file's existing precedent of fetching Brand Performance via its own
+# effect/endpoint rather than extending the summary contract (Story 4.1).
+@router.get("/notification-status", response_model=NotificationStatusResponse)
+async def notification_status(
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> NotificationStatusResponse:
+    service = NotificationStatusService(SqlAlchemyNotificationDeliveryRepository(session))
+    latest = await service.latest_notification_status()
+    if latest is None:
+        return NotificationStatusResponse(status=None, updated_at=None)
+    return NotificationStatusResponse(status=latest.status.value, updated_at=latest.updated_at)
