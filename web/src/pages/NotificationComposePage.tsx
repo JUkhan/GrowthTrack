@@ -304,7 +304,7 @@ function NotificationComposePage() {
             <Button variant="outlined" component={RouterLink} to="/dashboard" disabled={submitting}>
               Cancel
             </Button>
-            <Stack alignItems="flex-end" spacing={0.5}>
+            <Stack spacing={0.5} sx={{ alignItems: 'flex-end' }}>
               <Button
                 variant="contained"
                 disabled={!canSend}

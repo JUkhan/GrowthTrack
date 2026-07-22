@@ -110,10 +110,10 @@ function MixedRecipientPicker({
         getOptionLabel={(option) => option.name}
         isOptionEqualToValue={(option, value) => option.id === value.id && option.type === value.type}
         onChange={(_, value) => onChange(value)}
-        renderTags={(value, getTagProps) =>
+        renderValue={(value, getItemProps) =>
           value.map((option, index) => {
-            const { key, ...tagProps } = getTagProps({ index })
-            return <Chip key={key} label={option.name} {...tagProps} />
+            const { key, ...itemProps } = getItemProps({ index })
+            return <Chip key={key} label={option.name} {...itemProps} />
           })
         }
         renderInput={(params) => <TextField {...params} label="Recipients" />}
