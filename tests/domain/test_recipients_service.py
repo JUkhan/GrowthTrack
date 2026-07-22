@@ -6,6 +6,7 @@ import pytest
 from domain.administrators import LastAdministratorError, LastAdministratorGuard
 from domain.models import (
     AuditLogEntry,
+    Doctor,
     OptInConsent,
     RecipientList,
     RecipientListKind,
@@ -34,6 +35,7 @@ from domain.recipients import (
     TeamInactive,
     TeamNameTaken,
     TeamNotFound,
+    TeamRenameBreaksTerritoryMapping,
     UserDirectoryService,
     UserNotFound,
     VersionConflict,
@@ -172,6 +174,14 @@ class FakeAuditLogRepository:
 
     async def add(self, entry: AuditLogEntry) -> None:
         self.entries.append(entry)
+
+
+class FakeDoctorRepository:
+    def __init__(self, doctors: list[Doctor] | None = None) -> None:
+        self._doctors = doctors or []
+
+    async def list_all(self) -> list[Doctor]:
+        return list(self._doctors)
 
 
 class FakeRecipientListRepository:
@@ -704,7 +714,7 @@ async def test_update_user_with_an_unknown_id_raises_user_not_found():
 async def test_create_team_succeeds_and_writes_an_audit_entry():
     teams = FakeTeamRepository()
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
     actor_id = uuid.uuid4()
 
     team = await service.create_team(name="North Zone", actor_user_id=actor_id)
@@ -719,7 +729,7 @@ async def test_create_team_with_a_taken_name_raises_team_name_taken():
     existing = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([existing])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(TeamNameTaken):
         await service.create_team(name="North Zone", actor_user_id=uuid.uuid4())
@@ -731,7 +741,7 @@ async def test_create_team_trims_whitespace_before_the_uniqueness_check():
     existing = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([existing])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(TeamNameTaken):
         await service.create_team(name="  North Zone  ", actor_user_id=uuid.uuid4())
@@ -741,7 +751,7 @@ async def test_update_team_succeeds_and_writes_an_audit_entry():
     team = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([team])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     updated = await service.update_team(
         team_id=team.id, name="Northern Zone", expected_version=1, actor_user_id=uuid.uuid4()
@@ -751,12 +761,52 @@ async def test_update_team_succeeds_and_writes_an_audit_entry():
     assert audit_log.entries[0].action == "team.updated"
 
 
+async def test_update_team_rename_referenced_by_a_doctor_territory_raises_error():
+    team = Team(id=uuid.uuid4(), name="North Zone")
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    doctor = Doctor(
+        id=uuid.uuid4(),
+        external_doctor_id="D1",
+        name="Dr. Rahman",
+        territory="north zone",  # case-insensitive match against Team.name
+        priority=1,
+    )
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository([doctor]))
+
+    with pytest.raises(TeamRenameBreaksTerritoryMapping):
+        await service.update_team(
+            team_id=team.id, name="Northern Zone", expected_version=1, actor_user_id=uuid.uuid4()
+        )
+    assert team.name == "North Zone"  # rejected before any write
+
+
+async def test_update_team_casing_only_rename_is_still_allowed_despite_doctor_territory_match():
+    team = Team(id=uuid.uuid4(), name="North Zone")
+    teams = FakeTeamRepository([team])
+    audit_log = FakeAuditLogRepository()
+    doctor = Doctor(
+        id=uuid.uuid4(),
+        external_doctor_id="D1",
+        name="Dr. Rahman",
+        territory="north zone",
+        priority=1,
+    )
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository([doctor]))
+
+    updated = await service.update_team(
+        team_id=team.id, name="  North Zone  ", expected_version=1, actor_user_id=uuid.uuid4()
+    )
+
+    assert updated.name == "North Zone"
+
+
 async def test_update_team_to_a_name_taken_by_a_different_team_raises_team_name_taken():
     other = Team(id=uuid.uuid4(), name="South Zone")
     target = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([other, target])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(TeamNameTaken):
         await service.update_team(
@@ -767,7 +817,7 @@ async def test_update_team_to_a_name_taken_by_a_different_team_raises_team_name_
 async def test_update_team_with_an_unknown_id_raises_team_not_found():
     teams = FakeTeamRepository()
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(TeamNotFound):
         await service.update_team(
@@ -779,7 +829,7 @@ async def test_update_team_with_a_stale_version_raises_version_conflict():
     team = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([team])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(VersionConflict):
         await service.update_team(
@@ -797,7 +847,7 @@ async def test_update_team_racing_atomic_backstop_raises_version_conflict():
     team = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([team], simulate_update_race=True)
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(VersionConflict):
         await service.update_team(
@@ -815,7 +865,7 @@ async def test_remove_team_deactivates_it_and_writes_an_audit_entry():
     team = Team(id=uuid.uuid4(), name="North Zone")
     teams = FakeTeamRepository([team])
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     await service.remove_team(team_id=team.id, actor_user_id=uuid.uuid4())
 
@@ -826,7 +876,7 @@ async def test_remove_team_deactivates_it_and_writes_an_audit_entry():
 async def test_remove_team_with_an_unknown_id_raises_team_not_found():
     teams = FakeTeamRepository()
     audit_log = FakeAuditLogRepository()
-    service = TeamDirectoryService(teams, audit_log)
+    service = TeamDirectoryService(teams, audit_log, FakeDoctorRepository())
 
     with pytest.raises(TeamNotFound):
         await service.remove_team(team_id=uuid.uuid4(), actor_user_id=uuid.uuid4())

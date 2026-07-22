@@ -4,10 +4,24 @@ from datetime import UTC, datetime
 import pytest
 
 from adapters.persistence.database import create_session_factory
-from adapters.persistence.notifications import SqlAlchemyMessageTemplateRepository
+from adapters.persistence.notifications import (
+    SqlAlchemyMessageTemplateRepository,
+    SqlAlchemyNotificationDeliveryRepository,
+    SqlAlchemyNotificationRepository,
+)
+from adapters.persistence.users import SqlAlchemyUserRepository
 from api.main import app
 from api.notifications.routes import get_whatsapp_sender
-from domain.models import MessageTemplate
+from domain.models import (
+    DeliveryStatus,
+    MessageTemplate,
+    Notification,
+    NotificationDelivery,
+    NotificationType,
+    Role,
+    User,
+    UserStatus,
+)
 from ports.whatsapp import SendResult, WhatsAppSendError
 
 
@@ -47,6 +61,25 @@ async def _seed_template(
         await SqlAlchemyMessageTemplateRepository(session).add(template)
         await session.commit()
     return template
+
+
+async def _seed_recipient_user(mobile: str) -> User:
+    user = User(
+        id=uuid.uuid4(),
+        username=None,
+        hashed_password=None,
+        role=Role.SALES_USER,
+        status=UserStatus.ACTIVE,
+        version=1,
+        created_at=datetime.now(UTC),
+        name="Karim",
+        mobile=mobile,
+    )
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        await SqlAlchemyUserRepository(session).add(user)
+        await session.commit()
+    return user
 
 
 async def _login_as_admin(client, seed_user, username: str = "admin") -> None:
@@ -454,3 +487,45 @@ async def test_notification_status_before_any_send_returns_null_status(client, s
 
     assert response.status_code == 200
     assert response.json() == {"status": None, "updated_at": None}
+
+
+async def test_notification_status_reflects_a_scheduled_type_notification(client, seed_user):
+    # most_recent_status_summary() is notification_type-agnostic (Story
+    # 4.2 AC #5) — a Scheduled run's outcome must surface here exactly
+    # like a Manual send's, with no route/read-path change.
+    await _login_as_admin(client, seed_user)
+    template = await _seed_template("Daily Report Notice")
+    recipient = await _seed_recipient_user("+8801700001099")
+
+    notification = Notification(
+        id=uuid.uuid4(),
+        notification_type=NotificationType.SCHEDULED,
+        template_id=template.id,
+        created_at=datetime.now(UTC),
+        created_by_user_id=None,
+    )
+    delivery = NotificationDelivery(
+        id=uuid.uuid4(),
+        notification_id=notification.id,
+        notification_type=NotificationType.SCHEDULED,
+        recipient_user_id=recipient.id,
+        operational_day=datetime.now(UTC).date(),
+        status=DeliveryStatus.SENDING,
+        attempt_count=1,
+        provider_message_sid="SM-1",
+        failure_reason=None,
+        created_at=datetime.now(UTC),
+        updated_at=datetime.now(UTC),
+    )
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        await SqlAlchemyNotificationRepository(session).add(notification, [])
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([delivery])
+        await session.commit()
+
+    response = await client.get("/dashboard/notification-status")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "sending"
+    assert body["updated_at"] is not None

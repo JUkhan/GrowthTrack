@@ -58,6 +58,17 @@ class NotificationRepository(ABC):
         membership."""
         ...
 
+    @abstractmethod
+    async def try_acquire_daily_report_lock(self) -> bool:
+        """Non-blocking advisory lock scoped to the Daily Report scheduled
+        send (Story 4.2) — same shape as ``ImportRunRepository.
+        try_acquire_lock()``: transaction-scoped, returns ``False`` —
+        without mutating anything — when another run already holds it.
+        Defense-in-depth against two overlapping scheduler runs; the
+        partial unique index on (recipient_user_id, operational_day) is
+        the authoritative zero-duplicate-send guarantee (AD-2)."""
+        ...
+
 
 class NotificationDeliveryRepository(ABC):
     @abstractmethod

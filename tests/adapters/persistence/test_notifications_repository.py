@@ -490,6 +490,101 @@ async def test_scheduled_partial_unique_index_allows_the_same_recipient_a_manual
 # --- AC #7: manual send rows are queryable and correctly tagged -----------------
 
 
+async def test_try_acquire_daily_report_lock_succeeds_when_uncontended():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        acquired = await SqlAlchemyNotificationRepository(session).try_acquire_daily_report_lock()
+        await session.commit()
+
+    assert acquired is True
+
+
+async def test_try_acquire_daily_report_lock_fails_when_another_transaction_already_holds_it():
+    session_factory = create_session_factory()
+    async with session_factory() as holder_session:
+        holder_acquired = await SqlAlchemyNotificationRepository(
+            holder_session
+        ).try_acquire_daily_report_lock()
+        assert holder_acquired is True
+
+        async with session_factory() as contender_session:
+            contender_acquired = await SqlAlchemyNotificationRepository(
+                contender_session
+            ).try_acquire_daily_report_lock()
+
+        assert contender_acquired is False
+        await holder_session.commit()
+
+
+async def test_scheduled_partial_unique_index_rejects_a_same_day_duplicate_for_the_same_recipient():
+    user = await _seed_user("+8801700000918")
+    template = await _seed_template("Duplicate Scheduled Notice")
+    notification = await _seed_notification(template.id, user.id)
+    today = datetime.now(UTC).date()
+    row = _delivery_row(
+        notification.id,
+        user.id,
+        notification_type=NotificationType.SCHEDULED,
+        operational_day=today,
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([row])
+        await session.commit()
+
+    with pytest.raises(IntegrityError):
+        async with session_factory() as session:
+            duplicate = _delivery_row(
+                notification.id,
+                user.id,
+                notification_type=NotificationType.SCHEDULED,
+                operational_day=today,
+            )
+            await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([duplicate])
+            await session.commit()
+
+
+async def test_bulk_create_rolls_back_so_the_session_stays_usable_after_a_caught_duplicate():
+    # Regression test (code review): a failed flush leaves an AsyncSession's
+    # transaction unusable for any further statement until it's rolled
+    # back — bulk_create must roll back internally before re-raising, or a
+    # caller that catches the IntegrityError (exactly what
+    # ScheduledReportService.run_daily_report does for AC #4) would still
+    # crash on its own next statement (e.g. the caller's session.commit()).
+    user = await _seed_user("+8801700000919")
+    template = await _seed_template("Duplicate Scheduled Notice Rollback")
+    notification = await _seed_notification(template.id, user.id)
+    today = datetime.now(UTC).date()
+    row = _delivery_row(
+        notification.id,
+        user.id,
+        notification_type=NotificationType.SCHEDULED,
+        operational_day=today,
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([row])
+        await session.commit()
+
+    async with session_factory() as session:
+        duplicate = _delivery_row(
+            notification.id,
+            user.id,
+            notification_type=NotificationType.SCHEDULED,
+            operational_day=today,
+        )
+        with pytest.raises(IntegrityError):
+            await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([duplicate])
+
+        # If bulk_create hadn't rolled back internally, this would raise
+        # PendingRollbackError instead of completing normally.
+        acquired = await SqlAlchemyNotificationRepository(session).try_acquire_daily_report_lock()
+        assert acquired is True
+        await session.commit()
+
+
 async def test_a_completed_manual_sends_rows_carry_notification_type_manual_and_are_queryable():
     user = await _seed_user("+8801700000909")
     template = await _seed_template("AC7 Notice")

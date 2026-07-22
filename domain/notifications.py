@@ -12,6 +12,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from domain.models import (
     AuditLogEntry,
@@ -163,6 +164,79 @@ class DeliveryOutcome:
 class ComposeResult:
     notification_id: uuid.UUID
     outcomes: list[DeliveryOutcome]
+
+
+async def dispatch_deliveries(
+    deliveries: NotificationDeliveryRepository,
+    whatsapp: WhatsAppSender,
+    delivery_rows: list[NotificationDelivery],
+    content_variables_by_recipient: dict[uuid.UUID, dict[str, str]],
+    template_content_sid: str,
+    recipients_by_id: dict[uuid.UUID, Any],
+) -> list[DeliveryOutcome]:
+    """Per-recipient claim/send/fail loop shared by
+    ``ManualNotificationService.compose_and_send`` and
+    ``ScheduledReportService.run_daily_report`` — extracted rather than
+    duplicated (Story 4.2 Task 4 Step 8) since the claim-for-dispatch /
+    broad-exception-guard / outcome-recording shape is non-trivial and any
+    divergence between two independent copies would be a latent bug.
+    """
+    outcomes: list[DeliveryOutcome] = []
+
+    async def _fail(row: NotificationDelivery, reason: str) -> None:
+        # Every per-recipient failure mode — Twilio rejection, a
+        # transport/timeout error, or a missing recipient record — must
+        # land here rather than propagate: an uncaught exception here
+        # would abort the loop, and since this whole call is one
+        # uncommitted transaction, that would roll back the
+        # already-recorded outcomes (and Notification/audit rows) for
+        # every recipient processed so far, even though Twilio may have
+        # already sent them a real message.
+        await deliveries.update_after_send(row.id, DeliveryStatus.FAILED, None, reason)
+        outcomes.append(
+            DeliveryOutcome(
+                recipient_user_id=row.recipient_user_id,
+                status=DeliveryStatus.FAILED,
+                failure_reason=reason,
+            )
+        )
+
+    for row in delivery_rows:
+        claimed = await deliveries.claim_for_dispatch(row.id)
+        if not claimed:
+            continue  # pragma: no cover - unreachable for a freshly-created row
+
+        recipient = recipients_by_id.get(row.recipient_user_id)
+        if recipient is None:
+            await _fail(row, "recipient no longer exists")
+            continue
+
+        try:
+            result = await whatsapp.send_template_message(
+                to_number=recipient.mobile,
+                content_sid=template_content_sid,
+                content_variables=content_variables_by_recipient[row.recipient_user_id],
+            )
+        except WhatsAppSendError as exc:
+            await _fail(row, exc.message)
+            continue
+        except Exception as exc:
+            # Deliberately broad: see _fail's docstring above.
+            await _fail(row, str(exc))
+            continue
+
+        await deliveries.update_after_send(
+            row.id, DeliveryStatus.SENDING, result.provider_message_sid, None
+        )
+        outcomes.append(
+            DeliveryOutcome(
+                recipient_user_id=row.recipient_user_id,
+                status=DeliveryStatus.SENDING,
+                failure_reason=None,
+            )
+        )
+
+    return outcomes
 
 
 class MessageTemplateDirectoryService:
@@ -397,60 +471,21 @@ class ManualNotificationService:
         # Small manual-send batch sizes — looped synchronously (Twilio
         # allows 80 msg/sec per sender, far above this path's volume;
         # NFR-1's 500+ concurrent dispatch figure is Story 4.2's scope).
-        outcomes: list[DeliveryOutcome] = []
-
-        async def _fail(row: NotificationDelivery, reason: str) -> None:
-            # Every per-recipient failure mode — Twilio rejection, a
-            # transport/timeout error, or a missing recipient record — must
-            # land here rather than propagate: an uncaught exception here
-            # would abort the loop, and since this whole request is one
-            # uncommitted transaction, that would roll back the
-            # already-recorded outcomes (and Notification/audit rows) for
-            # every recipient processed so far, even though Twilio may have
-            # already sent them a real message.
-            await self._deliveries.update_after_send(row.id, DeliveryStatus.FAILED, None, reason)
-            outcomes.append(
-                DeliveryOutcome(
-                    recipient_user_id=row.recipient_user_id,
-                    status=DeliveryStatus.FAILED,
-                    failure_reason=reason,
-                )
-            )
-
-        for row in delivery_rows:
-            claimed = await self._deliveries.claim_for_dispatch(row.id)
-            if not claimed:
-                continue  # pragma: no cover - unreachable for a freshly-created row
-
-            recipient = recipients_by_id.get(row.recipient_user_id)
-            if recipient is None:
-                await _fail(row, "recipient no longer exists")
-                continue
-
-            try:
-                result = await self._whatsapp.send_template_message(
-                    to_number=recipient.mobile,
-                    content_sid=template.twilio_content_sid,
-                    content_variables=content_variables,
-                )
-            except WhatsAppSendError as exc:
-                await _fail(row, exc.message)
-                continue
-            except Exception as exc:
-                # Deliberately broad: see _fail's docstring above.
-                await _fail(row, str(exc))
-                continue
-
-            await self._deliveries.update_after_send(
-                row.id, DeliveryStatus.SENDING, result.provider_message_sid, None
-            )
-            outcomes.append(
-                DeliveryOutcome(
-                    recipient_user_id=row.recipient_user_id,
-                    status=DeliveryStatus.SENDING,
-                    failure_reason=None,
-                )
-            )
+        # Same content_variables dict for every recipient (Manual has no
+        # per-recipient variation, unlike ScheduledReportService's
+        # per-territory doctor section).
+        content_variables_by_recipient = {
+            recipient_user_id: content_variables
+            for recipient_user_id in resolved.recipient_user_ids
+        }
+        outcomes = await dispatch_deliveries(
+            deliveries=self._deliveries,
+            whatsapp=self._whatsapp,
+            delivery_rows=delivery_rows,
+            content_variables_by_recipient=content_variables_by_recipient,
+            template_content_sid=template.twilio_content_sid,
+            recipients_by_id=recipients_by_id,
+        )
 
         return ComposeResult(notification_id=notification.id, outcomes=outcomes)
 

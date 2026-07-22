@@ -16,3 +16,10 @@ ADMINISTRATOR_REMOVAL_LOCK_KEY = 615349082
 """Last-Administrator deactivate/delete serialization (Story 3.1 code
 review) — closes the count-then-act race Story 1.3's code review deferred
 to this story."""
+
+DAILY_REPORT_LOCK_KEY = 738104259
+"""Daily Report scheduled-send concurrency serialization (Story 4.2) —
+defense-in-depth against two scheduler processes/threads overlapping
+within the same trigger window; the authoritative zero-duplicate-send
+guarantee is AD-2's partial unique index on
+(recipient_user_id, operational_day)."""

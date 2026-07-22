@@ -1,5 +1,26 @@
 import uuid
 
+from adapters.persistence.database import create_session_factory
+from adapters.persistence.doctors import SqlAlchemyDoctorRepository
+from domain.models import Doctor
+
+
+async def _seed_doctor(territory: str, external_doctor_id: str = "D1") -> None:
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        await SqlAlchemyDoctorRepository(session).upsert_many(
+            [
+                Doctor(
+                    id=uuid.uuid4(),
+                    external_doctor_id=external_doctor_id,
+                    name="Dr. Rahman",
+                    territory=territory,
+                    priority=1,
+                )
+            ]
+        )
+        await session.commit()
+
 
 async def _login_as_admin(client, seed_user, username: str = "admin") -> None:
     _, password = await seed_user(username=username)
@@ -571,6 +592,30 @@ async def test_update_team_with_version_omitted_returns_422(client, seed_user):
 
     assert response.status_code == 422
     assert response.json()["error"]["code"] == "validation_error"
+
+
+async def test_update_team_referenced_by_a_doctor_territory_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "North Zone")
+    await _seed_doctor("north zone")  # case-insensitive match against Team.name
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "Northern Zone", "version": 1})
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "team_rename_breaks_territory_mapping"
+
+
+async def test_update_team_casing_only_rename_is_allowed_despite_doctor_territory_match(
+    client, seed_user
+):
+    await _login_as_admin(client, seed_user)
+    team_id = await _create_team(client, "North Zone")
+    await _seed_doctor("north zone")
+
+    response = await client.patch(f"/teams/{team_id}", json={"name": "North Zone", "version": 1})
+
+    assert response.status_code == 200
+    assert response.json()["name"] == "North Zone"
 
 
 # --- DELETE /teams/{id} -------------------------------------------------------------

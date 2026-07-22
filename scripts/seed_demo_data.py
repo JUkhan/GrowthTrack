@@ -139,19 +139,65 @@ async def _seed_message_templates(templates_repo: SqlAlchemyMessageTemplateRepos
     # (Notifications ▸ Compose ▸ "Manage templates", Story 4.5) to edit it
     # rather than a database edit.
     name = "Target Revision Notice"
+    if await templates_repo.get_by_name(name) is None:
+        await templates_repo.add(
+            MessageTemplate(
+                id=uuid.uuid4(),
+                name=name,
+                twilio_content_sid="HXdemoplaceholder0000000000000",
+                variable_slots=["team_name", "new_target", "effective_date"],
+                body_preview_template=(
+                    "GrowthTrack Notification\n\n"
+                    "{team_name} — target update\n\n"
+                    "{new_target}.\n\n"
+                    "Effective: {effective_date}"
+                ),
+                created_at=datetime.now(UTC),
+            )
+        )
+
+    await _seed_daily_report_template(templates_repo)
+
+
+async def _seed_daily_report_template(templates_repo: SqlAlchemyMessageTemplateRepository) -> None:
+    # ScheduledReportService looks this row up by this exact name
+    # (domain/scheduled_notifications.py's DAILY_REPORT_TEMPLATE_NAME).
+    # Placeholder Content SID, same as _seed_message_templates above — must
+    # be swapped for a real one, approved in the Twilio Console, before any
+    # real send. The real Console template's body text must itself be
+    # authored to avoid embedded newlines/tabs/4+ consecutive spaces inside
+    # any parameter placeholder (current Meta WhatsApp Business Platform
+    # template policy) — this seed script can only document that
+    # constraint, not enforce it, since the actual template body lives in
+    # the Twilio/Meta console, not here.
+    name = "Daily Report"
     if await templates_repo.get_by_name(name) is not None:
         return
     await templates_repo.add(
         MessageTemplate(
             id=uuid.uuid4(),
             name=name,
-            twilio_content_sid="HXdemoplaceholder0000000000000",
-            variable_slots=["team_name", "new_target", "effective_date"],
+            twilio_content_sid="HXdemoplaceholder0000000000001",
+            variable_slots=[
+                "ytd_sales",
+                "mtd_sales",
+                "achievement_pct",
+                "growth_pct",
+                "team_performance",
+                "top_brand",
+                "focus_brand",
+                "top_doctors",
+            ],
             body_preview_template=(
-                "GrowthTrack Notification\n\n"
-                "{team_name} — target update\n\n"
-                "{new_target}.\n\n"
-                "Effective: {effective_date}"
+                "GrowthTrack Daily Report\n\n"
+                "YTD Sales : {ytd_sales}\n"
+                "MTD Sales : {mtd_sales}\n"
+                "MTD Achievement : {achievement_pct}\n"
+                "MTD Growth : {growth_pct}\n\n"
+                "{team_performance}\n\n"
+                "Top Brand: {top_brand}\n"
+                "Focus Brand: {focus_brand}\n\n"
+                "Top Doctors: {top_doctors}"
             ),
             created_at=datetime.now(UTC),
         )

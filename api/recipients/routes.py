@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
 from adapters.persistence.consent import SqlAlchemyOptInConsentRepository
+from adapters.persistence.doctors import SqlAlchemyDoctorRepository
 from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
@@ -42,6 +43,7 @@ from domain.recipients import (
     TeamInactive,
     TeamNameTaken,
     TeamNotFound,
+    TeamRenameBreaksTerritoryMapping,
     UserDirectoryService,
     UserNotFound,
     VersionConflict,
@@ -184,6 +186,21 @@ def _team_inactive() -> HTTPException:
         detail={
             "code": "team_inactive",
             "message": "This Sales Team has been removed and can't accept new members",
+            "details": None,
+        },
+    )
+
+
+def _team_rename_breaks_territory_mapping() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "team_rename_breaks_territory_mapping",
+            "message": (
+                "This Sales Team's current name is used as a Territory by one or more "
+                "Doctors. Renaming it would disconnect this Team's Recipients from their "
+                "Daily Report doctor list."
+            ),
             "details": None,
         },
     )
@@ -561,7 +578,8 @@ async def create_team(
 ) -> TeamResponse:
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
-    service = TeamDirectoryService(teams, audit_log)
+    doctors = SqlAlchemyDoctorRepository(session)
+    service = TeamDirectoryService(teams, audit_log, doctors)
 
     try:
         team = await service.create_team(name=body.name, actor_user_id=current_user.id)
@@ -596,7 +614,8 @@ async def update_team(
 ) -> TeamResponse:
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
-    service = TeamDirectoryService(teams, audit_log)
+    doctors = SqlAlchemyDoctorRepository(session)
+    service = TeamDirectoryService(teams, audit_log, doctors)
 
     try:
         team = await service.update_team(
@@ -611,6 +630,9 @@ async def update_team(
     except TeamNameTaken:
         await session.commit()
         raise _team_name_taken() from None
+    except TeamRenameBreaksTerritoryMapping:
+        await session.commit()
+        raise _team_rename_breaks_territory_mapping() from None
     except VersionConflict:
         await session.commit()
         current = await teams.get_by_id(team_id)
@@ -635,7 +657,8 @@ async def remove_team(
 ) -> None:
     teams = SqlAlchemyTeamRepository(session)
     audit_log = SqlAlchemyAuditLogRepository(session)
-    service = TeamDirectoryService(teams, audit_log)
+    doctors = SqlAlchemyDoctorRepository(session)
+    service = TeamDirectoryService(teams, audit_log, doctors)
 
     try:
         await service.remove_team(team_id=team_id, actor_user_id=current_user.id)

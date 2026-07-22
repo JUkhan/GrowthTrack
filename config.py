@@ -91,6 +91,23 @@ class Settings(BaseSettings):
     brand_low_performing_n: int = Field(default=5, gt=0)
     brand_focus_n: int = Field(default=5, gt=0)
 
+    # [ASSUMPTION — CONFIRM] The PRD states this exact default explicitly
+    # (prd.md line 176: "the schedule is... [ASSUMPTION: default 07:00
+    # Asia/Dhaka, pending confirmation — §13]") — more concrete than
+    # nightly_import_cron_hour's own placeholder, but still flagged
+    # pending since the PRD itself marks it unconfirmed. 01:00 UTC = 07:00
+    # Asia/Dhaka (UTC+6). ReportSchedule (AD-11, DB-backed, Administrator-
+    # editable) is Story 4.4's job — this is the same provisional
+    # Settings-field-plus-.env-escape-hatch pattern as nightly_import_cron_*.
+    report_send_cron_hour: int = Field(default=1, ge=0, le=23)
+    report_send_cron_minute: int = Field(default=0, ge=0, le=59)
+
+    # [ASSUMPTION — CONFIRM] No source document specifies a doctor-list
+    # truncation count for the Daily Report (sample-whatsapp-report.md
+    # shows 3, but its own note frames that as illustrative, not spec'd).
+    # 5 for consistency with brand_top_n's default.
+    report_top_doctors_n: int = Field(default=5, gt=0)
+
     @field_validator("source_system_import_dir")
     @classmethod
     def _source_system_import_dir_not_blank(cls, value: str) -> str:

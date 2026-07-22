@@ -201,8 +201,10 @@ class Notification:
     id: uuid.UUID
     notification_type: NotificationType
     template_id: uuid.UUID
-    created_by_user_id: uuid.UUID
     created_at: datetime
+    # None for a Scheduled Notification (Story 4.2) — a system-triggered
+    # background job has no human actor to attribute the send to.
+    created_by_user_id: uuid.UUID | None = None
 
 
 @dataclass

@@ -10,19 +10,34 @@ import json
 import logging
 import pathlib
 import signal
+from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from adapters.persistence.brand_performance import SqlAlchemyBrandPerformanceRepository
+from adapters.persistence.consent import SqlAlchemyOptInConsentRepository
 from adapters.persistence.database import create_session_factory
 from adapters.persistence.doctors import SqlAlchemyDoctorRepository
 from adapters.persistence.import_runs import SqlAlchemyImportRunRepository
+from adapters.persistence.notifications import (
+    SqlAlchemyMessageTemplateRepository,
+    SqlAlchemyNotificationDeliveryRepository,
+    SqlAlchemyNotificationRepository,
+)
+from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
 from adapters.persistence.staging import SqlAlchemyStagingRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
+from adapters.persistence.users import SqlAlchemyUserRepository
 from adapters.source_system.csv_importer import CsvFileSourceSystemImporter
+from adapters.whatsapp_twilio.sender import TwilioWhatsAppSender
 from config import get_settings
+from domain.daily_report import DailyReportContentService
 from domain.ingestion import SourceSystemImportService
+from domain.metrics import BrandPerformanceService, DashboardMetricsService, DoctorVisitListService
+from domain.notifications import RecipientResolutionService
+from domain.scheduled_notifications import ScheduledReportService
 
 _RESERVED_LOG_RECORD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
     "message",
@@ -89,6 +104,72 @@ async def _run_nightly_import_async() -> None:
         await session.commit()
 
 
+def _run_daily_report() -> None:
+    try:
+        asyncio.run(_run_daily_report_async())
+    except Exception:
+        logger.exception("scheduled daily report job crashed")  # never let this kill the scheduler
+
+
+async def _run_daily_report_async() -> None:
+    session_factory = create_session_factory()
+    settings = get_settings()
+    now = datetime.now(UTC)
+    # Operational Day = Asia/Dhaka calendar day (PRD Glossary) — same
+    # UTC->Dhaka conversion api/dashboard/routes.py and
+    # scripts/seed_demo_data.py already use.
+    today = now.astimezone(ZoneInfo("Asia/Dhaka")).date()
+
+    async with session_factory() as session:
+        users = SqlAlchemyUserRepository(session)
+        teams = SqlAlchemyTeamRepository(session)
+        notifications = SqlAlchemyNotificationRepository(session)
+        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
+        templates = SqlAlchemyMessageTemplateRepository(session)
+
+        resolution = RecipientResolutionService(
+            users,
+            SqlAlchemyRecipientListRepository(session),
+            SqlAlchemyOptInConsentRepository(session),
+            teams,
+        )
+        content = DailyReportContentService(
+            dashboard_metrics=DashboardMetricsService(
+                sales_data=SqlAlchemySalesDataRepository(session),
+                teams=teams,
+                import_runs=SqlAlchemyImportRunRepository(session),
+                stale_after=timedelta(hours=settings.dashboard_stale_after_hours),
+            ),
+            brand_performance=BrandPerformanceService(
+                brand_performance=SqlAlchemyBrandPerformanceRepository(session),
+                top_n=settings.brand_top_n,
+                low_performing_n=settings.brand_low_performing_n,
+                focus_n=settings.brand_focus_n,
+            ),
+            doctor_visit_list=DoctorVisitListService(SqlAlchemyDoctorRepository(session)),
+            teams=teams,
+            top_doctors_n=settings.report_top_doctors_n,
+        )
+        service = ScheduledReportService(
+            notifications=notifications,
+            deliveries=deliveries,
+            templates=templates,
+            users=users,
+            resolution=resolution,
+            content=content,
+            whatsapp=TwilioWhatsAppSender(),
+        )
+
+        # ScheduledReportService.run_daily_report already catches AD-2's
+        # partial-unique-index duplicate rejection internally (a same-day
+        # duplicate that slipped past the advisory lock, e.g. a scheduler
+        # restart between the lock's commit and a cron misfire re-trigger)
+        # and returns a clean SKIPPED outcome — no IntegrityError escapes
+        # to this composition-root layer.
+        await service.run_daily_report(today, now)
+        await session.commit()
+
+
 def _register_jobs(scheduler: BlockingScheduler) -> None:
     scheduler.add_job(_heartbeat, "interval", seconds=30, id="heartbeat")
     # [ASSUMPTION — CONFIRM] Trigger time: neither the PRD nor the epics
@@ -105,6 +186,16 @@ def _register_jobs(scheduler: BlockingScheduler) -> None:
         hour=settings.nightly_import_cron_hour,
         minute=settings.nightly_import_cron_minute,
         id="nightly_import",
+    )
+    # [ASSUMPTION — CONFIRM] 01:00 UTC = 07:00 Asia/Dhaka default — the
+    # PRD's own stated placeholder (see config.py's report_send_cron_hour
+    # docstring), still pending business confirmation.
+    scheduler.add_job(
+        _run_daily_report,
+        "cron",
+        hour=settings.report_send_cron_hour,
+        minute=settings.report_send_cron_minute,
+        id="daily_report",
     )
 
 

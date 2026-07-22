@@ -31,6 +31,7 @@ from domain.models import (
 )
 from ports.audit import AuditLogRepository
 from ports.consent import OptInConsentRepository
+from ports.doctors import DoctorRepository
 from ports.recipient_lists import RecipientListRepository
 from ports.teams import TeamRepository
 from ports.users import UserRepository
@@ -116,6 +117,17 @@ class VersionConflict(Exception):
     """Raised when a save's ``expected_version`` no longer matches the
     record's current version — either the pre-check catches it directly,
     or the atomic conditional update's zero-rowcount does (Story 3.4)."""
+
+
+class TeamRenameBreaksTerritoryMapping(Exception):
+    """Raised when renaming a Team would silently disconnect Recipients
+    from their Doctor visit list (Story 4.2 code review) — Story 4.2's
+    ``DailyReportContentService.resolve_territories`` treats ``Team.name``
+    as ``Doctor.territory`` (case-insensitive), a convention with no
+    dedicated schema field. Blocked rather than silently allowed: the
+    Daily Report's failure mode for an orphaned territory (an empty "No
+    data available" doctor section, no error, no log) would otherwise go
+    unnoticed until someone questions why a team's report looks empty."""
 
 
 class UserDirectoryService:
@@ -275,9 +287,12 @@ class UserDirectoryService:
 
 
 class TeamDirectoryService:
-    def __init__(self, teams: TeamRepository, audit_log: AuditLogRepository) -> None:
+    def __init__(
+        self, teams: TeamRepository, audit_log: AuditLogRepository, doctors: DoctorRepository
+    ) -> None:
         self._teams = teams
         self._audit_log = audit_log
+        self._doctors = doctors
 
     async def create_team(self, name: str, actor_user_id: uuid.UUID) -> Team:
         # Trimmed here too (code review of Story 3.1), mirroring
@@ -316,6 +331,19 @@ class TeamDirectoryService:
         existing = await self._teams.get_by_name(name)
         if existing is not None and existing.id != team_id:
             raise TeamNameTaken()
+
+        # Story 4.2's Daily Report treats Team.name as Doctor.territory
+        # (case-insensitive match, no dedicated schema field) — a rename
+        # that changes this Team's normalized name away from a territory
+        # string Doctor rows still reference would silently orphan every
+        # Recipient on this Team from their doctor list. Block rather
+        # than allow: normalizing-equal renames (whitespace/casing only)
+        # keep the same match and are still allowed.
+        old_territory = target.name.strip().lower()
+        if old_territory != name.lower():
+            doctors = await self._doctors.list_all()
+            if any(doctor.territory.strip().lower() == old_territory for doctor in doctors):
+                raise TeamRenameBreaksTerritoryMapping()
 
         updated = await self._teams.update_name(team_id, name, expected_version)
         if not updated:

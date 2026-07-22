@@ -12,12 +12,14 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import cast
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, select, update
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, select, text, update
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.engine import CursorResult
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import Mapped, mapped_column
 
+from adapters.persistence.advisory_locks import DAILY_REPORT_LOCK_KEY
 from adapters.persistence.database import Base
 from domain.models import (
     DeliveryStatus,
@@ -54,8 +56,8 @@ class NotificationModel(Base):
     template_id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), ForeignKey("message_templates.id"), nullable=False
     )
-    created_by_user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False
+    created_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=True
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -210,6 +212,15 @@ class SqlAlchemyNotificationRepository(NotificationRepository):
         # notification_id, same reasoning as RecipientListRepository.add().
         await self._session.flush()
 
+    async def try_acquire_daily_report_lock(self) -> bool:
+        # Same pg_try_advisory_xact_lock pattern as
+        # SqlAlchemyImportRunRepository.try_acquire_lock — non-blocking,
+        # transaction-scoped, no separate release call needed.
+        result = await self._session.execute(
+            text("SELECT pg_try_advisory_xact_lock(:key)"), {"key": DAILY_REPORT_LOCK_KEY}
+        )
+        return bool(result.scalar())
+
 
 class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
     def __init__(self, session: AsyncSession) -> None:
@@ -232,7 +243,22 @@ class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
                     updated_at=row.updated_at,
                 )
             )
-        await self._session.flush()
+        try:
+            await self._session.flush()
+        except IntegrityError:
+            # A same-day duplicate scheduled run (AD-2's partial unique
+            # index on (recipient_user_id, operational_day)) lands here.
+            # A failed flush leaves the session's transaction unusable for
+            # any further statement — including the caller's eventual
+            # commit — until it's rolled back (same hazard
+            # SqlAlchemyImportRunRepository.mark_failed already rolls back
+            # for, Story 2.1). Roll back here, at the layer that actually
+            # knows about SQLAlchemy/Postgres transaction semantics (AD-1
+            # keeps this out of domain/), then re-raise so the caller's
+            # own except-Exception branch still sees and handles the
+            # duplicate.
+            await self._session.rollback()
+            raise
 
     async def claim_for_dispatch(self, delivery_id: uuid.UUID) -> bool:
         stmt = (
