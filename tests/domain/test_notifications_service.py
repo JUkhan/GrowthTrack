@@ -23,11 +23,14 @@ from domain.models import (
     UserStatus,
 )
 from domain.notifications import (
+    InvalidTemplateFields,
     InvalidVariableValues,
     ManualNotificationService,
+    MessageTemplateDirectoryService,
     NoRecipientsSelected,
     NotificationStatusService,
     RecipientResolutionService,
+    TemplateNameTaken,
     TemplateNotFound,
 )
 from ports.whatsapp import SendResult, WhatsAppSendError
@@ -136,6 +139,33 @@ class FakeMessageTemplateRepository:
 
     async def get_by_id(self, template_id: uuid.UUID) -> MessageTemplate | None:
         return self._by_id.get(template_id)
+
+    async def get_by_name(self, name: str) -> MessageTemplate | None:
+        return next((t for t in self._by_id.values() if t.name == name), None)
+
+    async def add(self, template: MessageTemplate) -> None:
+        self._by_id[template.id] = template
+
+    async def update(
+        self,
+        template_id: uuid.UUID,
+        name: str,
+        twilio_content_sid: str,
+        variable_slots: list[str],
+        body_preview_template: str,
+    ) -> bool:
+        existing = self._by_id.get(template_id)
+        if existing is None:
+            return False
+        self._by_id[template_id] = MessageTemplate(
+            id=template_id,
+            name=name,
+            twilio_content_sid=twilio_content_sid,
+            variable_slots=variable_slots,
+            body_preview_template=body_preview_template,
+            created_at=existing.created_at,
+        )
+        return True
 
 
 class FakeNotificationRepository:
@@ -724,3 +754,216 @@ async def test_latest_notification_status_is_worst_status_across_that_notificati
 
     assert latest is not None
     assert latest.status == DeliveryStatus.FAILED
+
+
+# --- MessageTemplateDirectoryService --------------------------------------------
+
+
+def _template_service(
+    templates: FakeMessageTemplateRepository | None = None,
+) -> tuple[MessageTemplateDirectoryService, FakeMessageTemplateRepository, FakeAuditLogRepository]:
+    templates = templates or FakeMessageTemplateRepository()
+    audit_log = FakeAuditLogRepository()
+    return MessageTemplateDirectoryService(templates, audit_log), templates, audit_log
+
+
+async def test_create_template_succeeds_and_writes_a_co_transactional_audit_entry():
+    service, templates, audit_log = _template_service()
+    actor_id = uuid.uuid4()
+
+    template = await service.create_template(
+        name="Target Revision Notice",
+        twilio_content_sid="HXreal123",
+        variable_slots=["team_name", "new_target"],
+        body_preview_template="{team_name}: {new_target}",
+        actor_user_id=actor_id,
+    )
+
+    assert await templates.get_by_id(template.id) == template
+    assert template.name == "Target Revision Notice"
+    assert template.twilio_content_sid == "HXreal123"
+
+    assert len(audit_log.entries) == 1
+    assert audit_log.entries[0].action == "message_template.created"
+    assert audit_log.entries[0].entity_id == template.id
+    assert audit_log.entries[0].actor_user_id == actor_id
+
+
+async def test_create_template_with_a_duplicate_name_raises_template_name_taken():
+    existing = _make_template()
+    service, _, _ = _template_service(FakeMessageTemplateRepository([existing]))
+
+    with pytest.raises(TemplateNameTaken):
+        await service.create_template(
+            name=existing.name,
+            twilio_content_sid="HXother",
+            variable_slots=[],
+            body_preview_template="Static body",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_create_template_rejects_blank_after_strip_name():
+    service, _, _ = _template_service()
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.create_template(
+            name="   ",
+            twilio_content_sid="HXreal123",
+            variable_slots=[],
+            body_preview_template="Static body",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_create_template_rejects_a_blank_variable_slot():
+    service, _, _ = _template_service()
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.create_template(
+            name="Target Revision Notice",
+            twilio_content_sid="HXreal123",
+            variable_slots=["team_name", "   "],
+            body_preview_template="{team_name}",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_create_template_rejects_duplicate_variable_slot_names():
+    service, _, _ = _template_service()
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.create_template(
+            name="Target Revision Notice",
+            twilio_content_sid="HXreal123",
+            variable_slots=["team_name", "team_name"],
+            body_preview_template="{team_name}",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_update_template_rejects_blank_after_strip_name():
+    existing = _make_template()
+    service, _, _ = _template_service(FakeMessageTemplateRepository([existing]))
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.update_template(
+            template_id=existing.id,
+            name="   ",
+            twilio_content_sid="HXreal123",
+            variable_slots=[],
+            body_preview_template="Static body",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_update_template_rejects_a_blank_variable_slot():
+    existing = _make_template()
+    service, _, _ = _template_service(FakeMessageTemplateRepository([existing]))
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.update_template(
+            template_id=existing.id,
+            name="Target Revision Notice",
+            twilio_content_sid="HXreal123",
+            variable_slots=["team_name", "   "],
+            body_preview_template="{team_name}",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_update_template_rejects_duplicate_variable_slot_names():
+    existing = _make_template()
+    service, _, _ = _template_service(FakeMessageTemplateRepository([existing]))
+
+    with pytest.raises(InvalidTemplateFields):
+        await service.update_template(
+            template_id=existing.id,
+            name="Target Revision Notice",
+            twilio_content_sid="HXreal123",
+            variable_slots=["team_name", "team_name"],
+            body_preview_template="{team_name}",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_update_template_records_changed_slots_and_preview_in_the_audit_entry():
+    existing = _make_template(["team_name"])
+    templates = FakeMessageTemplateRepository([existing])
+    service, _, audit_log = _template_service(templates)
+
+    await service.update_template(
+        template_id=existing.id,
+        name=existing.name,
+        twilio_content_sid=existing.twilio_content_sid,
+        variable_slots=["new_target"],
+        body_preview_template="{new_target}",
+        actor_user_id=uuid.uuid4(),
+    )
+
+    assert audit_log.entries[0].details["variable_slots"] == ["new_target"]
+    assert audit_log.entries[0].details["body_preview_template"] == "{new_target}"
+
+
+async def test_update_template_on_a_nonexistent_id_raises_template_not_found():
+    service, _, _ = _template_service()
+
+    with pytest.raises(TemplateNotFound):
+        await service.update_template(
+            template_id=uuid.uuid4(),
+            name="New Name",
+            twilio_content_sid="HXreal123",
+            variable_slots=[],
+            body_preview_template="Static body",
+            actor_user_id=uuid.uuid4(),
+        )
+
+
+async def test_update_template_changes_are_visible_via_a_subsequent_get_by_id():
+    existing = _make_template(["team_name"])
+    templates = FakeMessageTemplateRepository([existing])
+    service, _, audit_log = _template_service(templates)
+    actor_id = uuid.uuid4()
+
+    updated = await service.update_template(
+        template_id=existing.id,
+        name="Renamed Notice",
+        twilio_content_sid="HXupdated",
+        variable_slots=["new_target"],
+        body_preview_template="{new_target}",
+        actor_user_id=actor_id,
+    )
+
+    assert updated.name == "Renamed Notice"
+    assert updated.twilio_content_sid == "HXupdated"
+    fetched = await templates.get_by_id(existing.id)
+    assert fetched.name == "Renamed Notice"
+    assert fetched.variable_slots == ["new_target"]
+
+    assert len(audit_log.entries) == 1
+    assert audit_log.entries[0].action == "message_template.updated"
+    assert audit_log.entries[0].entity_id == existing.id
+
+
+async def test_update_template_colliding_with_a_different_templates_name_raises_taken():
+    first = _make_template()
+    second = MessageTemplate(
+        id=uuid.uuid4(),
+        name="Other Notice",
+        twilio_content_sid="HXother",
+        variable_slots=[],
+        body_preview_template="Static body",
+        created_at=datetime.now(UTC),
+    )
+    templates = FakeMessageTemplateRepository([first, second])
+    service, _, _ = _template_service(templates)
+
+    with pytest.raises(TemplateNameTaken):
+        await service.update_template(
+            template_id=second.id,
+            name=first.name,
+            twilio_content_sid="HXother",
+            variable_slots=[],
+            body_preview_template="Static body",
+            actor_user_id=uuid.uuid4(),
+        )

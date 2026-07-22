@@ -21,14 +21,31 @@ class MessageTemplateRepository(ABC):
 
     @abstractmethod
     async def get_by_name(self, name: str) -> Any | None:
-        """No Template-management UI exists yet (approval happens in
-        Twilio/Meta's console) — this and ``add`` exist for
-        ``scripts/seed_demo_data.py``'s idempotent-by-name seeding, the same
-        shape ``TeamRepository``/``RecipientListRepository`` already use."""
+        """Used by ``scripts/seed_demo_data.py``'s idempotent-by-name seeding
+        (same shape ``TeamRepository``/``RecipientListRepository`` use) and
+        by the Template-management create/edit flow's name-uniqueness check
+        (Story 4.5) — approval of the underlying WhatsApp template itself
+        still happens entirely in Twilio/Meta's console, never here."""
         ...
 
     @abstractmethod
     async def add(self, template: Any) -> None: ...
+
+    @abstractmethod
+    async def update(
+        self,
+        template_id: uuid.UUID,
+        name: str,
+        twilio_content_sid: str,
+        variable_slots: list[str],
+        body_preview_template: str,
+    ) -> bool:
+        """Unconditional field update — returns ``False`` if no row matched
+        ``template_id`` (not found), ``True`` otherwise. No version/
+        conditional-update semantics: unlike ``TeamRepository``/
+        ``UserRepository``, ``MessageTemplate`` has no optimistic-concurrency
+        column (Story 4.5's deliberate scope decision)."""
+        ...
 
 
 class NotificationRepository(ABC):

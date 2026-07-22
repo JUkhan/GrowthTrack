@@ -99,6 +99,36 @@ async def test_compose_and_send_without_cookie_returns_401(client):
     assert response.json()["error"]["code"] == "unauthorized"
 
 
+async def test_create_message_template_without_cookie_returns_401(client):
+    response = await client.post(
+        "/message-templates",
+        json={
+            "name": "No Auth Notice",
+            "twilio_content_sid": "HXabc",
+            "variable_slots": [],
+            "body_preview_template": "Static body",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_update_message_template_without_cookie_returns_401(client):
+    response = await client.patch(
+        f"/message-templates/{uuid.uuid4()}",
+        json={
+            "name": "No Auth Notice",
+            "twilio_content_sid": "HXabc",
+            "variable_slots": [],
+            "body_preview_template": "Static body",
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "unauthorized"
+
+
 # --- GET /message-templates ------------------------------------------------------
 
 
@@ -113,6 +143,115 @@ async def test_list_message_templates_returns_seeded_templates(client, seed_user
     matching = next(row for row in body if row["id"] == str(template.id))
     assert matching["name"] == "Listed Notice"
     assert matching["variable_slots"] == ["team_name"]
+    assert matching["twilio_content_sid"] == "HXabc123"
+
+
+# --- POST /message-templates -------------------------------------------------------
+
+
+async def test_create_message_template_succeeds_and_appears_in_a_subsequent_list(
+    client, seed_user
+):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(
+        "/message-templates",
+        json={
+            "name": "Created Notice",
+            "twilio_content_sid": "HXcreated",
+            "variable_slots": ["team_name", "new_target"],
+            "body_preview_template": "{team_name}: {new_target}",
+        },
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["name"] == "Created Notice"
+    assert body["twilio_content_sid"] == "HXcreated"
+    assert body["variable_slots"] == ["team_name", "new_target"]
+
+    list_response = await client.get("/message-templates")
+    assert any(row["id"] == body["id"] for row in list_response.json())
+
+
+async def test_create_message_template_with_a_duplicate_name_returns_409(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    await _seed_template("Duplicate Route Notice")
+
+    response = await client.post(
+        "/message-templates",
+        json={
+            "name": "Duplicate Route Notice",
+            "twilio_content_sid": "HXother",
+            "variable_slots": [],
+            "body_preview_template": "Static body",
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "template_name_taken"
+
+
+async def test_create_message_template_with_a_blank_variable_slot_returns_422(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.post(
+        "/message-templates",
+        json={
+            "name": "Blank Slot Notice",
+            "twilio_content_sid": "HXblank",
+            "variable_slots": ["team_name", "   "],
+            "body_preview_template": "{team_name}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "invalid_template_fields"
+
+
+# --- PATCH /message-templates/{id} -------------------------------------------------
+
+
+async def test_update_message_template_succeeds_and_change_is_reflected(client, seed_user):
+    await _login_as_admin(client, seed_user)
+    template = await _seed_template("Pre Update Notice", ["team_name"])
+
+    response = await client.patch(
+        f"/message-templates/{template.id}",
+        json={
+            "name": "Post Update Notice",
+            "twilio_content_sid": "HXupdated",
+            "variable_slots": ["new_target"],
+            "body_preview_template": "{new_target}",
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["name"] == "Post Update Notice"
+    assert body["twilio_content_sid"] == "HXupdated"
+    assert body["variable_slots"] == ["new_target"]
+
+    list_response = await client.get("/message-templates")
+    matching = next(row for row in list_response.json() if row["id"] == str(template.id))
+    assert matching["name"] == "Post Update Notice"
+
+
+async def test_update_message_template_on_a_nonexistent_id_returns_404(client, seed_user):
+    await _login_as_admin(client, seed_user)
+
+    response = await client.patch(
+        f"/message-templates/{uuid.uuid4()}",
+        json={
+            "name": "Ghost Notice",
+            "twilio_content_sid": "HXghost",
+            "variable_slots": [],
+            "body_preview_template": "Static body",
+        },
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "not_found"
 
 
 # --- POST /notifications/resolve-recipients --------------------------------------

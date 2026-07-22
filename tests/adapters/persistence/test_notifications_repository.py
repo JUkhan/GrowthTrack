@@ -140,6 +140,48 @@ async def test_list_active_includes_a_seeded_template():
     assert any(t.id == template.id for t in templates)
 
 
+async def test_update_persists_every_field_and_returns_true():
+    template = await _seed_template("Update Target Notice")
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        updated = await SqlAlchemyMessageTemplateRepository(session).update(
+            template.id,
+            "Renamed Notice",
+            "HXupdated",
+            ["new_slot"],
+            "{new_slot}",
+        )
+        await session.commit()
+
+    assert updated is True
+
+    async with session_factory() as session:
+        found = await SqlAlchemyMessageTemplateRepository(session).get_by_id(template.id)
+
+    assert found.name == "Renamed Notice"
+    assert found.twilio_content_sid == "HXupdated"
+    assert found.variable_slots == ["new_slot"]
+    assert found.body_preview_template == "{new_slot}"
+
+
+async def test_update_returns_false_for_an_unknown_id():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        updated = await SqlAlchemyMessageTemplateRepository(session).update(
+            uuid.uuid4(), "Name", "HXabc", [], "Static body"
+        )
+
+    assert updated is False
+
+
+async def test_name_unique_index_rejects_a_duplicate_template_name():
+    await _seed_template("Duplicate Notice")
+
+    with pytest.raises(IntegrityError):
+        await _seed_template("Duplicate Notice")
+
+
 # --- SqlAlchemyNotificationRepository --------------------------------------------
 
 

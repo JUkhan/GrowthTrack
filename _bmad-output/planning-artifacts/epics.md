@@ -31,6 +31,7 @@ FR-9: Administrator can add, edit, or remove individual Users, Recipient Groups,
 FR-10: System captures and records a Recipient's opt-in consent before enabling WhatsApp delivery; opt-out immediately stops future sends; consent state is visible in the Recipient directory.
 FR-11: Administrator can view a full, filterable (recipient/date/type) history of sent notifications with date, time, recipient, message type, and delivery status, appearing the same Operational Day.
 FR-12: All administrative actions (directory CRUD, opt-in/out changes, schedule changes, logins) are audit-logged with actor, timestamp, and what changed; an action and its audit entry succeed or fail together; the Audit Log is append-only.
+FR-13 `[ADDED 2026-07-22 via sprint-change-proposal-2026-07-22.md]`: Administrator can create, view, and edit MessageTemplate records (Name, Twilio Content SID, variable slots, preview text) used by FR-8's composer; no delete/deactivate; create/edit actions are audit-logged.
 
 ### NonFunctional Requirements
 
@@ -99,6 +100,7 @@ FR-9: Epic 3 - Manage recipient directory
 FR-10: Epic 3 - Recipient opt-in consent capture
 FR-11: Epic 5 - Notification history
 FR-12: Epic 5 - Administrative action audit log
+FR-13: Epic 4 - Manage message templates
 
 ## Epic List
 
@@ -115,8 +117,8 @@ Administrator can manage individual Users, Sales Teams, Recipient Groups, and Re
 **FRs covered:** FR-9, FR-10
 
 ### Epic 4: Automated & Manual WhatsApp Notifications
-Every configured Recipient gets an accurate, correctly formatted Daily Report automatically, every day, with failures retried and logged — and the Administrator can trigger an urgent Manual Notification at any time outside that schedule. Consolidated into one epic (not two) because both paths share the same delivery, retry, and zero-duplicate-send mechanism end to end.
-**FRs covered:** FR-6, FR-7, FR-8
+Every configured Recipient gets an accurate, correctly formatted Daily Report automatically, every day, with failures retried and logged — and the Administrator can trigger an urgent Manual Notification at any time outside that schedule. Consolidated into one epic (not two) because both paths share the same delivery, retry, and zero-duplicate-send mechanism end to end. Also owns the local `MessageTemplate` records FR-8's composer selects from — Administrator-editable, but never the Twilio/Meta approval process itself.
+**FRs covered:** FR-6, FR-7, FR-8, FR-13
 
 ### Epic 5: Notification History & Administrative Audit
 Administrator can look up exactly what was sent to whom and when, and produce a complete, append-only record of every administrative action (directory changes, opt-in/out, schedule changes, logins) — turning "trust me" into "check the log."
@@ -630,6 +632,34 @@ So that I can adjust when the team receives it without needing engineering invol
 **Given** the Daily Report schedule
 **When** it is stored
 **Then** it is a single, global setting persisted in the `ReportSchedule` entity (Architecture spine AD-11), not an environment variable — no per-recipient customization exists in Phase 1, and no redeploy is required to change it
+
+### Story 4.5: Manage Message Templates `[ADDED 2026-07-22 via sprint-change-proposal-2026-07-22.md]`
+
+As an Administrator,
+I want to create, view, and edit the message templates the Notification composer selects from,
+So that a real, Twilio/Meta-console-approved template can be entered and corrected without anyone touching the database directly.
+
+**Acceptance Criteria:**
+
+**Given** a WhatsApp template already approved in the Twilio/Meta console (Name, Content SID, variable slots, preview text)
+**When** I create a new MessageTemplate in GrowthTrack
+**Then** it is saved and becomes selectable in the Notification composer (Story 4.1), and the change is audit-logged in the same transaction as the write
+
+**Given** an existing MessageTemplate
+**When** I view the Templates list
+**Then** every template's Name, Content SID, variable slots, and preview text are shown — never hidden pagination or truncation, consistent with FR-9's directory-listing convention
+
+**Given** an existing MessageTemplate
+**When** I edit its Content SID, variable slots, or preview text
+**Then** the change takes effect for future Manual Notification sends, and is audit-logged co-transactionally
+
+**Given** a MessageTemplate
+**When** managed
+**Then** no delete/deactivate control is exposed — `[DECISION, confirmed with user 2026-07-22]` no status/active field exists on this entity in this iteration, unlike User/Team/RecipientList
+
+**Given** GrowthTrack's own template-approval workflow
+**When** this story is implemented
+**Then** it performs no approval/submission call to Twilio/Meta on the Administrator's behalf — approval remains entirely a console-side, out-of-band process (Architecture spine's existing Deferred item)
 
 ## Epic 5: Notification History & Administrative Audit
 

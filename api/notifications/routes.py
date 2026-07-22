@@ -8,9 +8,11 @@ never an inline per-route check).
 from __future__ import annotations
 
 import uuid
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from adapters.persistence.audit_log import SqlAlchemyAuditLogRepository
@@ -25,12 +27,15 @@ from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
 from adapters.whatsapp_twilio.sender import TwilioWhatsAppSender
 from api.auth.dependencies import get_current_user, get_db
-from domain.models import User
+from domain.models import MessageTemplate, User
 from domain.notifications import (
+    InvalidTemplateFields,
     InvalidVariableValues,
     ManualNotificationService,
+    MessageTemplateDirectoryService,
     NoRecipientsSelected,
     RecipientResolutionService,
+    TemplateNameTaken,
     TemplateNotFound,
 )
 from ports.whatsapp import WhatsAppSender
@@ -48,8 +53,22 @@ def get_whatsapp_sender() -> WhatsAppSender:
 class MessageTemplateResponse(BaseModel):
     id: uuid.UUID
     name: str
+    twilio_content_sid: str
     variable_slots: list[str]
     body_preview_template: str
+
+
+class MessageTemplateWriteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    twilio_content_sid: str = Field(min_length=1, max_length=255)
+    variable_slots: list[Annotated[str, Field(max_length=255)]] = Field(
+        default_factory=list, max_length=20
+    )
+    body_preview_template: str = Field(min_length=1, max_length=2000)
+
+
+CreateMessageTemplateRequest = MessageTemplateWriteRequest
+UpdateMessageTemplateRequest = MessageTemplateWriteRequest
 
 
 class ResolveRecipientsRequest(BaseModel):
@@ -117,21 +136,125 @@ def _template_not_found() -> HTTPException:
     )
 
 
+def _template_name_taken() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "code": "template_name_taken",
+            "message": "A message template with this name already exists",
+            "details": None,
+        },
+    )
+
+
+def _invalid_template_fields() -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        detail={
+            "code": "invalid_template_fields",
+            "message": "Name, Content SID, preview text, and every variable slot must be non-blank",
+            "details": None,
+        },
+    )
+
+
+def _to_message_template_response(template: MessageTemplate) -> MessageTemplateResponse:
+    return MessageTemplateResponse(
+        id=template.id,
+        name=template.name,
+        twilio_content_sid=template.twilio_content_sid,
+        variable_slots=template.variable_slots,
+        body_preview_template=template.body_preview_template,
+    )
+
+
 @message_templates_router.get("", response_model=list[MessageTemplateResponse])
 async def list_message_templates(
     current_user: User = Depends(get_current_user),
     session: AsyncSession = Depends(get_db),
 ) -> list[MessageTemplateResponse]:
     templates = SqlAlchemyMessageTemplateRepository(session)
-    return [
-        MessageTemplateResponse(
-            id=template.id,
-            name=template.name,
-            variable_slots=template.variable_slots,
-            body_preview_template=template.body_preview_template,
+    return [_to_message_template_response(template) for template in await templates.list_active()]
+
+
+@message_templates_router.post(
+    "", response_model=MessageTemplateResponse, status_code=status.HTTP_201_CREATED
+)
+async def create_message_template(
+    body: CreateMessageTemplateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageTemplateResponse:
+    templates = SqlAlchemyMessageTemplateRepository(session)
+    service = MessageTemplateDirectoryService(templates, SqlAlchemyAuditLogRepository(session))
+
+    try:
+        template = await service.create_template(
+            name=body.name,
+            twilio_content_sid=body.twilio_content_sid,
+            variable_slots=body.variable_slots,
+            body_preview_template=body.body_preview_template,
+            actor_user_id=current_user.id,
         )
-        for template in await templates.list_active()
-    ]
+    except TemplateNameTaken:
+        await session.commit()
+        raise _template_name_taken() from None
+    except InvalidTemplateFields:
+        await session.commit()
+        raise _invalid_template_fields() from None
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _template_name_taken() from None
+
+    return _to_message_template_response(template)
+
+
+@message_templates_router.patch("/{template_id}", response_model=MessageTemplateResponse)
+async def update_message_template(
+    template_id: uuid.UUID,
+    body: UpdateMessageTemplateRequest,
+    current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_db),
+) -> MessageTemplateResponse:
+    templates = SqlAlchemyMessageTemplateRepository(session)
+    service = MessageTemplateDirectoryService(templates, SqlAlchemyAuditLogRepository(session))
+
+    try:
+        template = await service.update_template(
+            template_id=template_id,
+            name=body.name,
+            twilio_content_sid=body.twilio_content_sid,
+            variable_slots=body.variable_slots,
+            body_preview_template=body.body_preview_template,
+            actor_user_id=current_user.id,
+        )
+    except TemplateNotFound:
+        await session.commit()
+        raise _template_not_found() from None
+    except TemplateNameTaken:
+        await session.commit()
+        raise _template_name_taken() from None
+    except InvalidTemplateFields:
+        await session.commit()
+        raise _invalid_template_fields() from None
+    except IntegrityError:
+        # Unlike create's INSERT (deferred to session.commit()), update()
+        # executes its UPDATE eagerly via session.execute() — a concurrent-
+        # rename race hits the unique-name index here, not at the commit
+        # below.
+        await session.rollback()
+        raise _template_name_taken() from None
+
+    try:
+        await session.commit()
+    except IntegrityError:
+        await session.rollback()
+        raise _template_name_taken() from None
+
+    return _to_message_template_response(template)
 
 
 @notifications_router.post("/resolve-recipients", response_model=ResolveRecipientsResponse)

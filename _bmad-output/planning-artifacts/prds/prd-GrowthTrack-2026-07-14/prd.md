@@ -10,7 +10,7 @@ updated: 2026-07-14
 
 ## 0. Document Purpose
 
-This PRD is for the PM, engineering/architecture, UX, and whoever builds the Phase 1 epics and stories. It builds directly on `_bmad-output/specs/spec-growthtrack/SPEC.md` and its companions (`entities.md`, `stack.md`, `architecture-diagrams.md`, `sample-whatsapp-report.md`, `roadmap-phase2.md`) — the reconciled contract distilled from two conflicting source SRS drafts — and does not duplicate their content wholesale. Market research, WhatsApp-provider comparison data, and options-considered rationale live in `addendum.md`; consult it for the *why* behind decisions this PRD states as fact. Vocabulary is Glossary-anchored (§3); Functional Requirements are grouped under Features (§4) and numbered globally (FR-1 through FR-12) so downstream artifacts have stable references; inferred details are tagged `[ASSUMPTION]` inline and indexed in §14.
+This PRD is for the PM, engineering/architecture, UX, and whoever builds the Phase 1 epics and stories. It builds directly on `_bmad-output/specs/spec-growthtrack/SPEC.md` and its companions (`entities.md`, `stack.md`, `architecture-diagrams.md`, `sample-whatsapp-report.md`, `roadmap-phase2.md`) — the reconciled contract distilled from two conflicting source SRS drafts — and does not duplicate their content wholesale. Market research, WhatsApp-provider comparison data, and options-considered rationale live in `addendum.md`; consult it for the *why* behind decisions this PRD states as fact. Vocabulary is Glossary-anchored (§3); Functional Requirements are grouped under Features (§4) and numbered globally (FR-1 through FR-13) so downstream artifacts have stable references; inferred details are tagged `[ASSUMPTION]` inline and indexed in §14. `[UPDATED 2026-07-22]` FR-13 (§4.9, Message Template Management) was added post-launch via a Sprint Change Proposal (`sprint-change-proposal-2026-07-22.md`) — every other FR reflects the original 2026-07-14 discovery.
 
 ## 1. Vision
 
@@ -248,6 +248,21 @@ All administrative actions are logged for audit. Realizes UJ-3.
 - The Audit Log is append-only and viewable by Administrators.
 - Retention period for audit records is defined before production launch — `[open question, §13]`.
 
+### 4.9 Message Template Management `[ADDED 2026-07-22]`
+**Description:** Administrator-facing management of the local `MessageTemplate` records that FR-8's composer selects from. This is deliberately narrow: WhatsApp template *approval* itself still happens entirely in the Twilio/Meta console (unchanged — see architecture spine's Deferred list) — this feature only lets an Administrator record an already-approved template's Content SID, name, variable slots, and preview text in GrowthTrack, instead of the only current path (a direct database edit or re-running the demo seed script).
+
+**Functional Requirements:**
+
+#### FR-13: Manage Message Templates
+Administrator can create, view, and edit `MessageTemplate` records used by FR-8's composer. Realizes UJ-1 (indirectly — a real send depends on a real template existing).
+
+**Consequences (testable):**
+- Administrator can create a `MessageTemplate` (Name, Twilio Content SID, variable slots, preview text) referencing a template already approved externally in the Twilio/Meta console — GrowthTrack performs no approval workflow of its own.
+- Administrator can view a list of all `MessageTemplate` records.
+- Administrator can edit an existing `MessageTemplate`'s fields (e.g. correct a Content SID, adjust variable slots or preview text).
+- No delete/deactivate capability — `[DECISION, confirmed with user 2026-07-22]` unlike User/Team/RecipientList, `MessageTemplate` gets no status/active field or soft-delete in this iteration; revisit if a real need to retire a template ever surfaces.
+- Every create/edit action is audit-logged co-transactionally, consistent with FR-12.
+
 ## 5. Non-Goals (Explicit)
 
 - **AI-based sales forecasting** — monthly/territory/brand-demand/target-achievement prediction, doctor potential scoring, low-sales alerts — is out of scope for Phase 1. Candidate scope fully preserved in `roadmap-phase2.md` (not yet validated as committed capabilities); Phase 1's data and delivery pipeline is what makes it buildable later.
@@ -268,6 +283,7 @@ All administrative actions are logged for audit. Realizes UJ-3.
 - Manual / Ad-Hoc Notifications (§4.6)
 - Recipient & Directory Management, including opt-in consent capture (§4.7)
 - Notification History & Administrative Audit Log (§4.8)
+- Message Template Management (§4.9) `[ADDED 2026-07-22]`
 
 ### 6.2 Out of Scope for MVP
 - Everything listed in §5 Non-Goals.

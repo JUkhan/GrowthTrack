@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from domain.models import (
     AuditLogEntry,
     DeliveryStatus,
+    MessageTemplate,
     Notification,
     NotificationDelivery,
     NotificationStatusSummary,
@@ -41,6 +42,19 @@ from ports.whatsapp import WhatsAppSender, WhatsAppSendError
 
 class TemplateNotFound(Exception):
     """Raised when no MessageTemplate exists for a given id."""
+
+
+class TemplateNameTaken(Exception):
+    """Raised when a MessageTemplate name is already in use by a different
+    MessageTemplate (Story 4.5) — mirrors TeamNameTaken's shape
+    (domain/recipients.py)."""
+
+
+class InvalidTemplateFields(Exception):
+    """Raised when a MessageTemplate's name/Content SID/preview text is
+    blank (after stripping) or a variable slot is blank — distinct from
+    InvalidVariableValues, which is about a composed *message*'s values
+    not matching a template's slots, not the template record itself."""
 
 
 class InvalidVariableValues(Exception):
@@ -149,6 +163,115 @@ class DeliveryOutcome:
 class ComposeResult:
     notification_id: uuid.UUID
     outcomes: list[DeliveryOutcome]
+
+
+class MessageTemplateDirectoryService:
+    """MessageTemplate CRUD (Story 4.5, FR-13) — mirrors
+    ``TeamDirectoryService``'s shape (domain/recipients.py), minus
+    version/conflict handling: this entity has no optimistic-concurrency
+    column, deliberately (see the story's Dev Notes). Records an
+    already-approved template's identifiers only — never submits or
+    approves anything with Twilio/Meta on the Administrator's behalf."""
+
+    def __init__(self, templates: MessageTemplateRepository, audit_log: AuditLogRepository) -> None:
+        self._templates = templates
+        self._audit_log = audit_log
+
+    async def create_template(
+        self,
+        name: str,
+        twilio_content_sid: str,
+        variable_slots: list[str],
+        body_preview_template: str,
+        actor_user_id: uuid.UUID,
+    ) -> MessageTemplate:
+        name = name.strip()
+        twilio_content_sid = twilio_content_sid.strip()
+        body_preview_template = body_preview_template.strip()
+        if not name or not twilio_content_sid or not body_preview_template:
+            raise InvalidTemplateFields()
+        if any(not slot.strip() for slot in variable_slots):
+            raise InvalidTemplateFields()
+        if len(set(variable_slots)) != len(variable_slots):
+            raise InvalidTemplateFields()
+
+        if await self._templates.get_by_name(name) is not None:
+            raise TemplateNameTaken()
+
+        template = MessageTemplate(
+            id=uuid.uuid4(),
+            name=name,
+            twilio_content_sid=twilio_content_sid,
+            variable_slots=variable_slots,
+            body_preview_template=body_preview_template,
+            created_at=datetime.now(UTC),
+        )
+        await self._templates.add(template)
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="message_template.created",
+                entity_type="MessageTemplate",
+                entity_id=template.id,
+                details={"name": name, "twilio_content_sid": twilio_content_sid},
+                created_at=template.created_at,
+            )
+        )
+        return template
+
+    async def update_template(
+        self,
+        template_id: uuid.UUID,
+        name: str,
+        twilio_content_sid: str,
+        variable_slots: list[str],
+        body_preview_template: str,
+        actor_user_id: uuid.UUID,
+    ) -> MessageTemplate:
+        target = await self._templates.get_by_id(template_id)
+        if target is None:
+            raise TemplateNotFound()
+
+        name = name.strip()
+        twilio_content_sid = twilio_content_sid.strip()
+        body_preview_template = body_preview_template.strip()
+        if not name or not twilio_content_sid or not body_preview_template:
+            raise InvalidTemplateFields()
+        if any(not slot.strip() for slot in variable_slots):
+            raise InvalidTemplateFields()
+        if len(set(variable_slots)) != len(variable_slots):
+            raise InvalidTemplateFields()
+
+        existing = await self._templates.get_by_name(name)
+        if existing is not None and existing.id != template_id:
+            raise TemplateNameTaken()
+
+        updated = await self._templates.update(
+            template_id, name, twilio_content_sid, variable_slots, body_preview_template
+        )
+        if not updated:
+            raise TemplateNotFound()
+        await self._audit_log.add(
+            AuditLogEntry(
+                id=uuid.uuid4(),
+                actor_user_id=actor_user_id,
+                action="message_template.updated",
+                entity_type="MessageTemplate",
+                entity_id=template_id,
+                details={
+                    "name": name,
+                    "twilio_content_sid": twilio_content_sid,
+                    "variable_slots": variable_slots,
+                    "body_preview_template": body_preview_template,
+                },
+                created_at=datetime.now(UTC),
+            )
+        )
+        refreshed = await self._templates.get_by_id(template_id)
+        if refreshed is None:
+            raise TemplateNotFound()
+        return refreshed
 
 
 class ManualNotificationService:

@@ -134,10 +134,10 @@ async def _seed_recipient_lists(
 
 
 async def _seed_message_templates(templates_repo: SqlAlchemyMessageTemplateRepository) -> None:
-    # No Template-management UI exists yet (approval happens in
-    # Twilio/Meta's console per the architecture spine's Deferred list) —
-    # this placeholder Content SID must be swapped for a real one from the
-    # Twilio Console before any real send.
+    # This placeholder Content SID must be swapped for a real one, approved
+    # in the Twilio Console, before any real send — use the Templates page
+    # (Notifications ▸ Compose ▸ "Manage templates", Story 4.5) to edit it
+    # rather than a database edit.
     name = "Target Revision Notice"
     if await templates_repo.get_by_name(name) is not None:
         return

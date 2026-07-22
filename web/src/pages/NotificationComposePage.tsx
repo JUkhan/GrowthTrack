@@ -281,6 +281,9 @@ function NotificationComposePage() {
                   </MenuItem>
                 ))}
               </TextField>
+              <Link component={RouterLink} to="/notifications/templates" sx={{ alignSelf: 'flex-start' }}>
+                Manage templates
+              </Link>
               {selectedTemplate?.variable_slots.map((slot) => (
                 <TextField
                   key={slot}

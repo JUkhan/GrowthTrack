@@ -160,6 +160,27 @@ class SqlAlchemyMessageTemplateRepository(MessageTemplateRepository):
             )
         )
 
+    async def update(
+        self,
+        template_id: uuid.UUID,
+        name: str,
+        twilio_content_sid: str,
+        variable_slots: list[str],
+        body_preview_template: str,
+    ) -> bool:
+        stmt = (
+            update(MessageTemplateModel)
+            .where(MessageTemplateModel.id == template_id)
+            .values(
+                name=name,
+                twilio_content_sid=twilio_content_sid,
+                variable_slots=variable_slots,
+                body_preview_template=body_preview_template,
+            )
+        )
+        result = cast(CursorResult, await self._session.execute(stmt))
+        return result.rowcount > 0
+
 
 class SqlAlchemyNotificationRepository(NotificationRepository):
     def __init__(self, session: AsyncSession) -> None:
