@@ -21,8 +21,10 @@ from domain.models import (
     TeamStatus,
     User,
     UserStatus,
+    WebhookOutcome,
 )
 from domain.notifications import (
+    DeliveryStatusWebhookService,
     InvalidTemplateFields,
     InvalidVariableValues,
     ManualNotificationService,
@@ -32,6 +34,7 @@ from domain.notifications import (
     RecipientResolutionService,
     TemplateNameTaken,
     TemplateNotFound,
+    WebhookApplyResult,
 )
 from ports.whatsapp import SendResult, WhatsAppSendError
 
@@ -169,11 +172,16 @@ class FakeMessageTemplateRepository:
 
 
 class FakeNotificationRepository:
-    def __init__(self) -> None:
+    def __init__(self, notifications: list[Notification] | None = None) -> None:
         self.added: list[tuple[Notification, list[NotificationTarget]]] = []
+        self._by_id = {n.id: n for n in (notifications or [])}
 
     async def add(self, notification: Notification, targets: list[NotificationTarget]) -> None:
         self.added.append((notification, targets))
+        self._by_id[notification.id] = notification
+
+    async def get_by_id(self, notification_id: uuid.UUID) -> Notification | None:
+        return self._by_id.get(notification_id)
 
 
 class FakeNotificationDeliveryRepository:
@@ -230,6 +238,28 @@ class FakeNotificationDeliveryRepository:
         return NotificationStatusSummary(
             status=worst.status, updated_at=max(row.updated_at for row in rows)
         )
+
+    async def get_by_provider_message_sid(self, sid: str) -> NotificationDelivery | None:
+        return next(
+            (row for row in self._by_id.values() if row.provider_message_sid == sid), None
+        )
+
+    async def update_status_from_webhook(
+        self, delivery_id: uuid.UUID, status: DeliveryStatus, failure_reason: str | None
+    ) -> None:
+        row = self._by_id.get(delivery_id)
+        if row is not None:
+            row.status = status
+            row.failure_reason = failure_reason
+
+    async def list_retry_eligible(self, now: datetime) -> list[NotificationDelivery]:
+        # Fake, not the real backoff-window arithmetic (that's covered by
+        # tests/adapters/persistence/test_notifications_repository.py) —
+        # DeliveryStatusWebhookService/dispatch_deliveries never call this
+        # method, only the scheduler's retry job does.
+        return [
+            row for row in self._by_id.values() if row.status == DeliveryStatus.FAILED_RETRYABLE
+        ]
 
 
 class FakeAuditLogRepository:
@@ -386,6 +416,7 @@ def _manual_service(
     whatsapp: FakeWhatsAppSender | None = None,
     recipient_lists: FakeRecipientListRepository | None = None,
     consents: FakeOptInConsentRepository | None = None,
+    max_retry_attempts: int = 3,
 ) -> tuple[
     ManualNotificationService,
     FakeNotificationRepository,
@@ -404,6 +435,7 @@ def _manual_service(
         whatsapp=whatsapp or FakeWhatsAppSender(),
         resolution=resolution,
         audit_log=audit_log,
+        max_retry_attempts=max_retry_attempts,
     )
     return service, notifications, deliveries, audit_log
 
@@ -554,7 +586,11 @@ async def test_compose_and_send_rejects_blank_variable_values():
     assert notifications.added == []
 
 
-async def test_compose_and_send_a_whatsapp_failure_is_recorded_as_failed_not_raised():
+async def test_compose_and_send_a_whatsapp_failure_is_recorded_as_failed_retryable_not_raised():
+    # With the default 3-retry budget, a first failure is FAILED_RETRYABLE
+    # (retry-eligible), not terminal FAILED — Story 4.3's intentional
+    # behavior change from Story 4.1's original always-terminal-on-first-
+    # failure design.
     ok_user = _make_user(mobile="+8801700000307")
     fails_user = _make_user(mobile="+8801700000308")
     users = FakeUserRepository([ok_user, fails_user])
@@ -578,12 +614,39 @@ async def test_compose_and_send_a_whatsapp_failure_is_recorded_as_failed_not_rai
     outcomes_by_user = {o.recipient_user_id: o for o in result.outcomes}
     assert outcomes_by_user[ok_user.id].status == DeliveryStatus.SENDING
     assert outcomes_by_user[ok_user.id].failure_reason is None
-    assert outcomes_by_user[fails_user.id].status == DeliveryStatus.FAILED
+    assert outcomes_by_user[fails_user.id].status == DeliveryStatus.FAILED_RETRYABLE
     assert outcomes_by_user[fails_user.id].failure_reason == "21610: recipient opted out"
 
     statuses = {row.recipient_user_id: row.status for row in deliveries._by_id.values()}
     assert statuses[ok_user.id] == DeliveryStatus.SENDING
-    assert statuses[fails_user.id] == DeliveryStatus.FAILED
+    assert statuses[fails_user.id] == DeliveryStatus.FAILED_RETRYABLE
+
+
+async def test_compose_and_send_a_whatsapp_failure_with_no_retry_budget_is_immediately_failed():
+    # Ceiling boundary: max_retry_attempts=0 means the very first failure
+    # is already terminal — no retry budget at all.
+    fails_user = _make_user(mobile="+8801700000330")
+    users = FakeUserRepository([fails_user])
+    consents = FakeOptInConsentRepository({fails_user.id})
+    template = _make_template([])
+    templates = FakeMessageTemplateRepository([template])
+    whatsapp = FakeWhatsAppSender(fail_for={fails_user.mobile})
+    service, _, deliveries, _ = _manual_service(
+        users, templates, whatsapp=whatsapp, consents=consents, max_retry_attempts=0
+    )
+
+    result = await service.compose_and_send(
+        template_id=template.id,
+        variable_values={},
+        user_ids=[fails_user.id],
+        team_ids=[],
+        recipient_list_ids=[],
+        actor_user_id=uuid.uuid4(),
+    )
+
+    assert result.outcomes[0].status == DeliveryStatus.FAILED
+    (only_row,) = deliveries._by_id.values()
+    assert only_row.status == DeliveryStatus.FAILED
 
 
 async def test_compose_and_send_an_unexpected_transport_error_is_recorded_as_failed_not_raised():
@@ -623,7 +686,7 @@ async def test_compose_and_send_an_unexpected_transport_error_is_recorded_as_fai
 
     outcomes_by_user = {o.recipient_user_id: o for o in result.outcomes}
     assert outcomes_by_user[ok_user.id].status == DeliveryStatus.SENDING
-    assert outcomes_by_user[crashes_user.id].status == DeliveryStatus.FAILED
+    assert outcomes_by_user[crashes_user.id].status == DeliveryStatus.FAILED_RETRYABLE
     assert outcomes_by_user[crashes_user.id].failure_reason == "connection timed out"
 
 
@@ -666,6 +729,99 @@ async def test_compose_and_send_skips_a_delivery_whose_claim_lost_the_race():
     assert len(result.outcomes) == 1
     assert result.outcomes[0].recipient_user_id == u1.id
     assert len(whatsapp.sent) == 1
+
+
+# --- DeliveryStatusWebhookService.apply_status_update ---------------------------
+
+
+def _make_delivery(
+    status: DeliveryStatus = DeliveryStatus.SENDING,
+    attempt_count: int = 1,
+    provider_message_sid: str | None = "SM-current",
+) -> NotificationDelivery:
+    now = datetime.now(UTC)
+    return NotificationDelivery(
+        id=uuid.uuid4(),
+        notification_id=uuid.uuid4(),
+        notification_type=NotificationType.MANUAL,
+        recipient_user_id=uuid.uuid4(),
+        operational_day=None,
+        status=status,
+        attempt_count=attempt_count,
+        provider_message_sid=provider_message_sid,
+        failure_reason=None,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+async def test_apply_status_update_applies_delivered_from_sending():
+    deliveries = FakeNotificationDeliveryRepository()
+    row = _make_delivery(status=DeliveryStatus.SENDING)
+    await deliveries.bulk_create([row])
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-current", WebhookOutcome.DELIVERED, None)
+
+    assert result == WebhookApplyResult.APPLIED
+    assert deliveries._by_id[row.id].status == DeliveryStatus.DELIVERED
+
+
+async def test_apply_status_update_applies_failure_as_failed_retryable_when_attempts_remain():
+    deliveries = FakeNotificationDeliveryRepository()
+    row = _make_delivery(status=DeliveryStatus.SENDING, attempt_count=1)
+    await deliveries.bulk_create([row])
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-current", WebhookOutcome.FAILURE, "21610")
+
+    assert result == WebhookApplyResult.APPLIED
+    assert deliveries._by_id[row.id].status == DeliveryStatus.FAILED_RETRYABLE
+    assert deliveries._by_id[row.id].failure_reason == "21610"
+
+
+async def test_apply_status_update_applies_failure_as_terminal_failed_at_the_attempt_ceiling():
+    deliveries = FakeNotificationDeliveryRepository()
+    row = _make_delivery(status=DeliveryStatus.SENDING, attempt_count=4)
+    await deliveries.bulk_create([row])
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-current", WebhookOutcome.FAILURE, "21610")
+
+    assert result == WebhookApplyResult.APPLIED
+    assert deliveries._by_id[row.id].status == DeliveryStatus.FAILED
+
+
+async def test_apply_status_update_returns_superseded_for_an_unknown_sid():
+    deliveries = FakeNotificationDeliveryRepository()
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-unknown", WebhookOutcome.DELIVERED, None)
+
+    assert result == WebhookApplyResult.SUPERSEDED
+
+
+async def test_apply_status_update_rejects_a_backward_transition():
+    deliveries = FakeNotificationDeliveryRepository()
+    row = _make_delivery(status=DeliveryStatus.DELIVERED, attempt_count=1)
+    await deliveries.bulk_create([row])
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-current", WebhookOutcome.FAILURE, "21610")
+
+    assert result == WebhookApplyResult.REJECTED_NON_MONOTONIC
+    assert deliveries._by_id[row.id].status == DeliveryStatus.DELIVERED
+
+
+async def test_apply_status_update_rejects_a_repeated_same_status_callback_as_a_no_op():
+    deliveries = FakeNotificationDeliveryRepository()
+    row = _make_delivery(status=DeliveryStatus.DELIVERED, attempt_count=1)
+    await deliveries.bulk_create([row])
+    service = DeliveryStatusWebhookService(deliveries, max_retry_attempts=3)
+
+    result = await service.apply_status_update("SM-current", WebhookOutcome.DELIVERED, None)
+
+    assert result == WebhookApplyResult.REJECTED_NON_MONOTONIC
 
 
 # --- NotificationStatusService -------------------------------------------------

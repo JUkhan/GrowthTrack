@@ -36,7 +36,7 @@ from config import get_settings
 from domain.daily_report import DailyReportContentService
 from domain.ingestion import SourceSystemImportService
 from domain.metrics import BrandPerformanceService, DashboardMetricsService, DoctorVisitListService
-from domain.notifications import RecipientResolutionService
+from domain.notifications import RecipientResolutionService, dispatch_deliveries
 from domain.scheduled_notifications import ScheduledReportService
 
 _RESERVED_LOG_RECORD_FIELDS = frozenset(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
@@ -158,6 +158,7 @@ async def _run_daily_report_async() -> None:
             resolution=resolution,
             content=content,
             whatsapp=TwilioWhatsAppSender(),
+            max_retry_attempts=settings.notification_max_retry_attempts,
         )
 
         # ScheduledReportService.run_daily_report already catches AD-2's
@@ -167,6 +168,97 @@ async def _run_daily_report_async() -> None:
         # and returns a clean SKIPPED outcome — no IntegrityError escapes
         # to this composition-root layer.
         await service.run_daily_report(today, now)
+        await session.commit()
+
+
+def _run_retry_failed_deliveries() -> None:
+    try:
+        asyncio.run(_run_retry_failed_deliveries_async())
+    except Exception:
+        logger.exception("retry failed deliveries job crashed")  # never let this kill the scheduler
+
+
+async def _run_retry_failed_deliveries_async() -> None:
+    session_factory = create_session_factory()
+    settings = get_settings()
+    now = datetime.now(UTC)
+
+    async with session_factory() as session:
+        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
+        notifications = SqlAlchemyNotificationRepository(session)
+        templates = SqlAlchemyMessageTemplateRepository(session)
+        users = SqlAlchemyUserRepository(session)
+        whatsapp = TwilioWhatsAppSender()
+
+        rows = await deliveries.list_retry_eligible(now)
+        for row in rows:
+            try:
+                notification = await notifications.get_by_id(row.notification_id)
+                template = (
+                    await templates.get_by_id(notification.template_id)
+                    if notification is not None
+                    else None
+                )
+                recipient = await users.get_by_id(row.recipient_user_id)
+
+                # A missing Notification/MessageTemplate/recipient
+                # (soft-delete makes this rare) must still consume a retry
+                # attempt rather than being silently skipped —
+                # dispatch_deliveries' own "recipient not found" branch
+                # already implements exactly that outcome (claim, then fail
+                # via _status_after_failed_attempt), so an empty
+                # recipients_by_id reuses it here rather than a second copy
+                # of the claim/send/record logic (Task 4 Step 8's
+                # extraction is exactly what this reuses). The specific
+                # missing record is logged here since dispatch_deliveries'
+                # shared failure_reason column always records the same
+                # generic "recipient no longer exists" string regardless of
+                # which record was actually missing.
+                if notification is None or template is None or recipient is None:
+                    logger.warning(
+                        "retry delivery has a missing related record",
+                        extra={
+                            "delivery_id": str(row.id),
+                            "notification_found": notification is not None,
+                            "template_found": template is not None,
+                            "recipient_found": recipient is not None,
+                        },
+                    )
+                recipients_by_id = (
+                    {recipient.id: recipient}
+                    if template is not None and recipient is not None
+                    else {}
+                )
+                template_content_sid = template.twilio_content_sid if template is not None else ""
+
+                await dispatch_deliveries(
+                    deliveries=deliveries,
+                    whatsapp=whatsapp,
+                    delivery_rows=[row],
+                    content_variables_by_recipient={row.recipient_user_id: row.content_variables},
+                    template_content_sid=template_content_sid,
+                    recipients_by_id=recipients_by_id,
+                    max_retry_attempts=settings.notification_max_retry_attempts,
+                )
+            except Exception:
+                # Isolate one row's failure (e.g. a transient DB error on
+                # one of the lookups above) from the rest of the batch —
+                # committing per row below means an exception here can
+                # only roll back this row's own not-yet-committed work,
+                # never a prior row's already-recorded, already-sent
+                # outcome.
+                logger.exception(
+                    "retry delivery dispatch failed, will be retried next poll",
+                    extra={"delivery_id": str(row.id)},
+                )
+                await session.rollback()
+                continue
+
+            await session.commit()
+
+        # Also reached (as a harmless no-op commit) when rows is empty —
+        # matches every other job's contract of always committing once per
+        # run, even a run with nothing to do.
         await session.commit()
 
 
@@ -196,6 +288,18 @@ def _register_jobs(scheduler: BlockingScheduler) -> None:
         hour=settings.report_send_cron_hour,
         minute=settings.report_send_cron_minute,
         id="daily_report",
+    )
+    # "interval", not "cron": this polls continuously for retry-eligible
+    # deliveries rather than firing at a fixed time of day. APScheduler's
+    # default max_instances=1 per job already prevents overlapping runs if
+    # one poll cycle runs long — no advisory lock key needed, since
+    # claim_for_dispatch's existing atomic conditional UPDATE is what
+    # actually guards against double-dispatch (Story 4.3).
+    scheduler.add_job(
+        _run_retry_failed_deliveries,
+        "interval",
+        seconds=settings.notification_retry_poll_interval_seconds,
+        id="retry_failed_deliveries",
     )
 
 

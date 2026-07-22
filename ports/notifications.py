@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Any
 
 
@@ -69,6 +70,12 @@ class NotificationRepository(ABC):
         the authoritative zero-duplicate-send guarantee (AD-2)."""
         ...
 
+    @abstractmethod
+    async def get_by_id(self, notification_id: uuid.UUID) -> Any | None:
+        """Used by the retry job (Story 4.3) to find a delivery row's
+        parent Notification, and from there its ``template_id``."""
+        ...
+
 
 class NotificationDeliveryRepository(ABC):
     @abstractmethod
@@ -99,4 +106,30 @@ class NotificationDeliveryRepository(ABC):
         across all of that Notification's delivery rows, so a single late
         failure or success can't misrepresent the rest. Feeds the
         Dashboard's notification-status tile (AC #8)."""
+        ...
+
+    @abstractmethod
+    async def get_by_provider_message_sid(self, sid: str) -> Any | None:
+        """The webhook's correlation lookup (Story 4.3, AC #2). Doubles as
+        the stale/superseded check for free: ``provider_message_sid`` is
+        overwritten on every retry attempt (``update_after_send`` always
+        sets it), so a payload naming a SID no row currently carries *is*
+        the superseded case — returning ``None`` here is that signal."""
+        ...
+
+    @abstractmethod
+    async def update_status_from_webhook(
+        self, delivery_id: uuid.UUID, status: Any, failure_reason: str | None
+    ) -> None:
+        """Does not touch ``attempt_count`` — unlike ``update_after_send``,
+        a webhook status update is not a new send attempt; the attempt was
+        already counted when the row was dispatched. Reusing
+        ``update_after_send`` here would double-count attempts."""
+        ...
+
+    @abstractmethod
+    async def list_retry_eligible(self, now: datetime) -> list[Any]:
+        """Rows with ``status == 'failed_retryable'`` whose backoff window
+        (keyed by ``attempt_count``) has elapsed as of ``now`` (Story 4.3,
+        AC #4/#5)."""
         ...

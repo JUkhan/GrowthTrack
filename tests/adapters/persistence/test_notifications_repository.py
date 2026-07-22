@@ -1,5 +1,5 @@
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from sqlalchemy import text
@@ -12,6 +12,7 @@ from adapters.persistence.notifications import (
     SqlAlchemyNotificationRepository,
 )
 from adapters.persistence.users import SqlAlchemyUserRepository
+from config import get_settings
 from domain.models import (
     DeliveryStatus,
     MessageTemplate,
@@ -82,6 +83,10 @@ def _delivery_row(
     notification_type: NotificationType = NotificationType.MANUAL,
     operational_day=None,
     status: DeliveryStatus = DeliveryStatus.QUEUED,
+    attempt_count: int = 0,
+    provider_message_sid: str | None = None,
+    updated_at: datetime | None = None,
+    content_variables: dict[str, str] | None = None,
 ) -> NotificationDelivery:
     now = datetime.now(UTC)
     return NotificationDelivery(
@@ -91,11 +96,12 @@ def _delivery_row(
         recipient_user_id=recipient_user_id,
         operational_day=operational_day,
         status=status,
-        attempt_count=0,
-        provider_message_sid=None,
+        attempt_count=attempt_count,
+        provider_message_sid=provider_message_sid,
         failure_reason=None,
         created_at=now,
-        updated_at=now,
+        updated_at=updated_at or now,
+        content_variables=content_variables or {},
     )
 
 
@@ -608,3 +614,222 @@ async def test_a_completed_manual_sends_rows_carry_notification_type_manual_and_
             {"id": row.id},
         )
         assert delivery_type.scalar_one() == "manual"
+
+
+# --- SqlAlchemyNotificationRepository.get_by_id (Story 4.3) ----------------------
+
+
+async def test_get_by_id_round_trips_a_notification():
+    user = await _seed_user("+8801700000920")
+    template = await _seed_template("Get By Id Notice")
+    notification = await _seed_notification(template.id, user.id)
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        found = await SqlAlchemyNotificationRepository(session).get_by_id(notification.id)
+
+    assert found is not None
+    assert found.id == notification.id
+    assert found.template_id == template.id
+
+
+async def test_get_by_id_returns_none_for_an_unknown_notification_id():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        found = await SqlAlchemyNotificationRepository(session).get_by_id(uuid.uuid4())
+
+    assert found is None
+
+
+# --- content_variables persistence (Story 4.3) -----------------------------------
+
+
+async def test_bulk_create_and_get_by_provider_message_sid_round_trip_content_variables():
+    user = await _seed_user("+8801700000921")
+    template = await _seed_template("Content Variables Notice")
+    notification = await _seed_notification(template.id, user.id)
+    row = _delivery_row(
+        notification.id,
+        user.id,
+        provider_message_sid="SM-round-trip",
+        content_variables={"1": "Team B", "2": "65 Cr BDT"},
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([row])
+        await session.commit()
+
+    async with session_factory() as session:
+        found = await SqlAlchemyNotificationDeliveryRepository(
+            session
+        ).get_by_provider_message_sid("SM-round-trip")
+
+    assert found is not None
+    assert found.content_variables == {"1": "Team B", "2": "65 Cr BDT"}
+
+
+# --- SqlAlchemyNotificationDeliveryRepository.get_by_provider_message_sid --------
+
+
+async def test_get_by_provider_message_sid_returns_none_for_an_unknown_sid():
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        found = await SqlAlchemyNotificationDeliveryRepository(
+            session
+        ).get_by_provider_message_sid("SM-does-not-exist")
+
+    assert found is None
+
+
+# --- SqlAlchemyNotificationDeliveryRepository.update_status_from_webhook ---------
+
+
+async def test_update_status_from_webhook_changes_status_and_reason_but_not_attempt_count():
+    user = await _seed_user("+8801700000922")
+    template = await _seed_template("Webhook Update Notice")
+    notification = await _seed_notification(template.id, user.id)
+    row = _delivery_row(
+        notification.id,
+        user.id,
+        status=DeliveryStatus.SENDING,
+        attempt_count=1,
+        provider_message_sid="SM-webhook-update",
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([row])
+        await session.commit()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).update_status_from_webhook(
+            row.id, DeliveryStatus.DELIVERED, None
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        result = await session.execute(
+            text(
+                "SELECT status, attempt_count FROM notification_deliveries WHERE id = :id"
+            ),
+            {"id": row.id},
+        )
+        status, attempt_count = result.one()
+        assert status == "delivered"
+        # The specific bug this method's existence prevents: a webhook
+        # status update is not a new send attempt.
+        assert attempt_count == 1
+
+
+# --- SqlAlchemyNotificationDeliveryRepository.list_retry_eligible ----------------
+
+
+async def test_list_retry_eligible_returns_a_row_once_its_backoff_window_has_elapsed():
+    # Two distinct recipients of the same Notification — AD-2's partial
+    # unique index is scoped to (notification_id, recipient_user_id), so
+    # two rows for the same recipient on the same Notification would
+    # collide.
+    elapsed_user = await _seed_user("+8801700000923")
+    not_yet_user = await _seed_user("+8801700000933")
+    template = await _seed_template("Retry Eligible Notice")
+    notification = await _seed_notification(template.id, elapsed_user.id)
+    settings = get_settings()
+    now = datetime.now(UTC)
+
+    # attempt_count=1's backoff window (notification_retry_backoff_minutes_1,
+    # default 1 minute) elapsed 2 minutes ago -> eligible.
+    elapsed = _delivery_row(
+        notification.id,
+        elapsed_user.id,
+        status=DeliveryStatus.FAILED_RETRYABLE,
+        attempt_count=1,
+        updated_at=now - timedelta(minutes=settings.notification_retry_backoff_minutes_1 + 1),
+    )
+    # attempt_count=1's backoff window has not yet elapsed -> not eligible.
+    not_yet = _delivery_row(
+        notification.id,
+        not_yet_user.id,
+        status=DeliveryStatus.FAILED_RETRYABLE,
+        attempt_count=1,
+        updated_at=now,
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([elapsed, not_yet])
+        await session.commit()
+
+    async with session_factory() as session:
+        eligible = await SqlAlchemyNotificationDeliveryRepository(session).list_retry_eligible(now)
+
+    eligible_ids = {row.id for row in eligible}
+    assert elapsed.id in eligible_ids
+    assert not_yet.id not in eligible_ids
+
+
+async def test_list_retry_eligible_checks_each_attempt_counts_own_backoff_window():
+    users = [
+        await _seed_user("+8801700000924"),
+        await _seed_user("+8801700000934"),
+        await _seed_user("+8801700000944"),
+    ]
+    template = await _seed_template("Retry Eligible Backoff Notice")
+    notification = await _seed_notification(template.id, users[0].id)
+    settings = get_settings()
+    now = datetime.now(UTC)
+
+    rows_by_attempt = {}
+    for user, (attempt_count, minutes) in zip(
+        users,
+        (
+            (1, settings.notification_retry_backoff_minutes_1),
+            (2, settings.notification_retry_backoff_minutes_2),
+            (3, settings.notification_retry_backoff_minutes_3),
+        ),
+        strict=True,
+    ):
+        rows_by_attempt[attempt_count] = _delivery_row(
+            notification.id,
+            user.id,
+            status=DeliveryStatus.FAILED_RETRYABLE,
+            attempt_count=attempt_count,
+            updated_at=now - timedelta(minutes=minutes + 1),
+        )
+
+    session_factory = create_session_factory()
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create(
+            list(rows_by_attempt.values())
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        eligible = await SqlAlchemyNotificationDeliveryRepository(session).list_retry_eligible(now)
+
+    eligible_ids = {row.id for row in eligible}
+    assert {row.id for row in rows_by_attempt.values()} <= eligible_ids
+
+
+async def test_list_retry_eligible_excludes_a_row_that_is_not_failed_retryable():
+    user = await _seed_user("+8801700000925")
+    template = await _seed_template("Retry Eligible Status Notice")
+    notification = await _seed_notification(template.id, user.id)
+    now = datetime.now(UTC)
+    terminal = _delivery_row(
+        notification.id,
+        user.id,
+        status=DeliveryStatus.FAILED,
+        attempt_count=4,
+        updated_at=now - timedelta(hours=1),
+    )
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([terminal])
+        await session.commit()
+
+    async with session_factory() as session:
+        eligible = await SqlAlchemyNotificationDeliveryRepository(session).list_retry_eligible(now)
+
+    assert terminal.id not in {row.id for row in eligible}

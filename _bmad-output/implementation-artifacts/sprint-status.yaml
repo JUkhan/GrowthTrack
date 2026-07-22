@@ -76,7 +76,7 @@ development_status:
   4-1-compose-send-manual-notification: done
   4-5-manage-message-templates: done
   4-2-automated-daily-report-generation-send: done
-  4-3-delivery-status-webhook-automatic-retry: ready-for-dev
+  4-3-delivery-status-webhook-automatic-retry: done
   4-4-daily-report-schedule-configuration: backlog
   epic-4-retrospective: optional
 

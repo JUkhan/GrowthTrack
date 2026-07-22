@@ -9,9 +9,11 @@ number than what actually gets sent.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 from domain.models import (
@@ -27,6 +29,7 @@ from domain.models import (
     TargetType,
     TeamStatus,
     UserStatus,
+    WebhookOutcome,
 )
 from ports.audit import AuditLogRepository
 from ports.consent import OptInConsentRepository
@@ -39,6 +42,8 @@ from ports.recipient_lists import RecipientListRepository
 from ports.teams import TeamRepository
 from ports.users import UserRepository
 from ports.whatsapp import WhatsAppSender, WhatsAppSendError
+
+logger = logging.getLogger(__name__)
 
 
 class TemplateNotFound(Exception):
@@ -150,12 +155,26 @@ class RecipientResolutionService:
         )
 
 
+def _status_after_failed_attempt(
+    attempt_count_after_increment: int, max_retry_attempts: int
+) -> DeliveryStatus:
+    """Shared decision function for both of this story's failure sources —
+    a synchronous send-time rejection and an asynchronous webhook-reported
+    failure — so the retry budget is counted consistently regardless of
+    which path discovered the failure (Story 4.3). ``FAILED_RETRYABLE``
+    while attempts remain, terminal ``FAILED`` once the budget is
+    exhausted (AC #5 — left Failed, not re-claimed by this Send Event)."""
+    if attempt_count_after_increment < 1 + max_retry_attempts:
+        return DeliveryStatus.FAILED_RETRYABLE
+    return DeliveryStatus.FAILED
+
+
 @dataclass
 class DeliveryOutcome:
     recipient_user_id: uuid.UUID
-    # Only "sending" (accepted by Twilio) or "failed" (rejected, terminal)
-    # are produced here — delivered/retrying are Story 4.3's webhook-driven
-    # transitions.
+    # "sending" (accepted by Twilio), "failed_retryable" (rejected, retry
+    # budget remains), or "failed" (rejected, terminal) are produced here
+    # — delivered is Story 4.3's webhook-driven transition only.
     status: DeliveryStatus
     failure_reason: str | None
 
@@ -173,6 +192,7 @@ async def dispatch_deliveries(
     content_variables_by_recipient: dict[uuid.UUID, dict[str, str]],
     template_content_sid: str,
     recipients_by_id: dict[uuid.UUID, Any],
+    max_retry_attempts: int,
 ) -> list[DeliveryOutcome]:
     """Per-recipient claim/send/fail loop shared by
     ``ManualNotificationService.compose_and_send`` and
@@ -192,11 +212,22 @@ async def dispatch_deliveries(
         # already-recorded outcomes (and Notification/audit rows) for
         # every recipient processed so far, even though Twilio may have
         # already sent them a real message.
-        await deliveries.update_after_send(row.id, DeliveryStatus.FAILED, None, reason)
+        status = _status_after_failed_attempt(row.attempt_count + 1, max_retry_attempts)
+        await deliveries.update_after_send(row.id, status, None, reason)
+        logger.warning(
+            "notification delivery attempt failed",
+            extra={
+                "delivery_id": str(row.id),
+                "recipient_user_id": str(row.recipient_user_id),
+                "attempt_count": row.attempt_count + 1,
+                "status": status.value,
+                "reason": reason,
+            },
+        )
         outcomes.append(
             DeliveryOutcome(
                 recipient_user_id=row.recipient_user_id,
-                status=DeliveryStatus.FAILED,
+                status=status,
                 failure_reason=reason,
             )
         )
@@ -227,6 +258,15 @@ async def dispatch_deliveries(
 
         await deliveries.update_after_send(
             row.id, DeliveryStatus.SENDING, result.provider_message_sid, None
+        )
+        logger.info(
+            "notification delivery attempt sent",
+            extra={
+                "delivery_id": str(row.id),
+                "recipient_user_id": str(row.recipient_user_id),
+                "attempt_count": row.attempt_count + 1,
+                "provider_message_sid": result.provider_message_sid,
+            },
         )
         outcomes.append(
             DeliveryOutcome(
@@ -358,6 +398,7 @@ class ManualNotificationService:
         whatsapp: WhatsAppSender,
         resolution: RecipientResolutionService,
         audit_log: AuditLogRepository,
+        max_retry_attempts: int,
     ) -> None:
         self._templates = templates
         self._notifications = notifications
@@ -366,6 +407,7 @@ class ManualNotificationService:
         self._whatsapp = whatsapp
         self._resolution = resolution
         self._audit_log = audit_log
+        self._max_retry_attempts = max_retry_attempts
 
     async def compose_and_send(
         self,
@@ -440,6 +482,13 @@ class ManualNotificationService:
             )
         )
 
+        # Positional string keys ("1", "2", ...), not named — variable_slots'
+        # order is what maps a named slot to Twilio's positional key.
+        content_variables = {
+            str(index): variable_values[slot]
+            for index, slot in enumerate(template.variable_slots, start=1)
+        }
+
         delivery_rows = [
             NotificationDelivery(
                 id=uuid.uuid4(),
@@ -453,6 +502,9 @@ class ManualNotificationService:
                 failure_reason=None,
                 created_at=now,
                 updated_at=now,
+                # Persisted so a retry can resend the exact values this row
+                # was originally composed with (Story 4.3).
+                content_variables=content_variables,
             )
             for recipient_user_id in resolved.recipient_user_ids
         ]
@@ -460,12 +512,6 @@ class ManualNotificationService:
 
         recipients_by_id = {
             user.id: user for user in await self._users.get_many_by_ids(resolved.recipient_user_ids)
-        }
-        # Positional string keys ("1", "2", ...), not named — variable_slots'
-        # order is what maps a named slot to Twilio's positional key.
-        content_variables = {
-            str(index): variable_values[slot]
-            for index, slot in enumerate(template.variable_slots, start=1)
         }
 
         # Small manual-send batch sizes — looped synchronously (Twilio
@@ -485,9 +531,72 @@ class ManualNotificationService:
             content_variables_by_recipient=content_variables_by_recipient,
             template_content_sid=template.twilio_content_sid,
             recipients_by_id=recipients_by_id,
+            max_retry_attempts=self._max_retry_attempts,
         )
 
         return ComposeResult(notification_id=notification.id, outcomes=outcomes)
+
+
+class WebhookApplyResult(StrEnum):
+    """For the webhook route to log — not to branch business logic on
+    (Story 4.3)."""
+
+    APPLIED = "applied"
+    SUPERSEDED = "superseded"
+    REJECTED_NON_MONOTONIC = "rejected_non_monotonic"
+
+
+# Rank table for AC #3's monotonic-transition check. DELIVERED/RETRYING/
+# FAILED/FAILED_RETRYABLE share the same top tier — a webhook can move a
+# delivery *into* any one of them from QUEUED/SENDING, but never between
+# them (e.g. DELIVERED -> FAILURE is rejected, and a repeated same-status
+# callback is correctly a no-op rather than wasted work).
+_STATUS_RANK: dict[DeliveryStatus, int] = {
+    DeliveryStatus.QUEUED: 0,
+    DeliveryStatus.SENDING: 1,
+    DeliveryStatus.DELIVERED: 2,
+    DeliveryStatus.RETRYING: 2,
+    DeliveryStatus.FAILED: 2,
+    DeliveryStatus.FAILED_RETRYABLE: 2,
+}
+
+
+class DeliveryStatusWebhookService:
+    """Applies a Twilio delivery-status callback to the matching
+    ``NotificationDelivery`` row (Story 4.3, AC #1-#3). No audit-log entry
+    is written — mirrors ``domain/ingestion.py``'s precedent: an inbound
+    provider callback has no human actor (AD-7 governs administrative
+    actions only). Plain structured logging is used instead, at the route
+    layer."""
+
+    def __init__(self, deliveries: NotificationDeliveryRepository, max_retry_attempts: int) -> None:
+        self._deliveries = deliveries
+        self._max_retry_attempts = max_retry_attempts
+
+    async def apply_status_update(
+        self, provider_message_sid: str, outcome: WebhookOutcome, failure_reason: str | None
+    ) -> WebhookApplyResult:
+        row = await self._deliveries.get_by_provider_message_sid(provider_message_sid)
+        if row is None:
+            # The SID doesn't match any row's *current* SID (AC #2) —
+            # provider_message_sid is overwritten on every retry attempt,
+            # so this means the payload belongs to an attempt that has
+            # since been superseded by a retry.
+            return WebhookApplyResult.SUPERSEDED
+
+        if outcome == WebhookOutcome.DELIVERED:
+            candidate = DeliveryStatus.DELIVERED
+        else:
+            # row.attempt_count is already the post-increment value from
+            # the original dispatch (update_after_send incremented it at
+            # send time) — this webhook call must not increment it again.
+            candidate = _status_after_failed_attempt(row.attempt_count, self._max_retry_attempts)
+
+        if _STATUS_RANK[candidate] <= _STATUS_RANK[row.status]:
+            return WebhookApplyResult.REJECTED_NON_MONOTONIC
+
+        await self._deliveries.update_status_from_webhook(row.id, candidate, failure_reason)
+        return WebhookApplyResult.APPLIED
 
 
 class NotificationStatusService:

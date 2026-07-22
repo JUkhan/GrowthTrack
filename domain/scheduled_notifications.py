@@ -93,6 +93,7 @@ class ScheduledReportService:
         resolution: RecipientResolutionService,
         content: DailyReportContentService,
         whatsapp: WhatsAppSender,
+        max_retry_attempts: int,
     ) -> None:
         self._notifications = notifications
         self._deliveries = deliveries
@@ -101,6 +102,7 @@ class ScheduledReportService:
         self._resolution = resolution
         self._content = content
         self._whatsapp = whatsapp
+        self._max_retry_attempts = max_retry_attempts
 
     async def run_daily_report(self, today: date, now: datetime) -> ScheduledReportResult:
         # Defense-in-depth against two overlapping scheduler
@@ -150,40 +152,11 @@ class ScheduledReportService:
         # selections to record (unlike Manual's raw user/team/list picks).
         await self._notifications.add(notification, [])
 
-        delivery_rows = [
-            NotificationDelivery(
-                id=uuid.uuid4(),
-                notification_id=notification.id,
-                notification_type=NotificationType.SCHEDULED,
-                recipient_user_id=recipient_user_id,
-                operational_day=today,
-                status=DeliveryStatus.QUEUED,
-                attempt_count=0,
-                provider_message_sid=None,
-                failure_reason=None,
-                created_at=now,
-                updated_at=now,
-            )
-            for recipient_user_id in resolved.recipient_user_ids
-        ]
-        try:
-            await self._deliveries.bulk_create(delivery_rows)
-        except Exception:
-            # Broad on purpose, mirroring domain/ingestion.py's own
-            # top-level `except Exception` precedent: AD-1 forbids domain
-            # from importing sqlalchemy, so this can't name
-            # sqlalchemy.exc.IntegrityError directly. This call site's
-            # only expected failure is a same-day duplicate run that
-            # slipped past the advisory lock above (e.g. a scheduler
-            # restart between the lock's commit and a cron misfire
-            # re-trigger) hitting AD-2's partial unique index — not a
-            # stand-in for error handling anywhere else in this method.
-            logger.info(
-                "scheduled report already sent for operational_day, skipping",
-                extra={"operational_day": today.isoformat()},
-            )
-            return ScheduledReportResult(outcome=ScheduledReportOutcome.SKIPPED)
-
+        # Computed before delivery_rows below (rather than after
+        # bulk_create, as originally structured) so each row's
+        # content_variables can be persisted at creation time — a retry
+        # needs the exact per-recipient values this row was composed with,
+        # and nothing else stores them (Story 4.3).
         recipients_by_id = {
             user.id: user
             for user in await self._users.get_many_by_ids(resolved.recipient_user_ids)
@@ -230,6 +203,41 @@ class ScheduledReportService:
                 for index, slot in enumerate(template.variable_slots, start=1)
             }
 
+        delivery_rows = [
+            NotificationDelivery(
+                id=uuid.uuid4(),
+                notification_id=notification.id,
+                notification_type=NotificationType.SCHEDULED,
+                recipient_user_id=recipient_user_id,
+                operational_day=today,
+                status=DeliveryStatus.QUEUED,
+                attempt_count=0,
+                provider_message_sid=None,
+                failure_reason=None,
+                created_at=now,
+                updated_at=now,
+                content_variables=content_variables_by_recipient.get(recipient_user_id, {}),
+            )
+            for recipient_user_id in resolved.recipient_user_ids
+        ]
+        try:
+            await self._deliveries.bulk_create(delivery_rows)
+        except Exception:
+            # Broad on purpose, mirroring domain/ingestion.py's own
+            # top-level `except Exception` precedent: AD-1 forbids domain
+            # from importing sqlalchemy, so this can't name
+            # sqlalchemy.exc.IntegrityError directly. This call site's
+            # only expected failure is a same-day duplicate run that
+            # slipped past the advisory lock above (e.g. a scheduler
+            # restart between the lock's commit and a cron misfire
+            # re-trigger) hitting AD-2's partial unique index — not a
+            # stand-in for error handling anywhere else in this method.
+            logger.info(
+                "scheduled report already sent for operational_day, skipping",
+                extra={"operational_day": today.isoformat()},
+            )
+            return ScheduledReportResult(outcome=ScheduledReportOutcome.SKIPPED)
+
         outcomes = await dispatch_deliveries(
             deliveries=self._deliveries,
             whatsapp=self._whatsapp,
@@ -237,14 +245,22 @@ class ScheduledReportService:
             content_variables_by_recipient=content_variables_by_recipient,
             template_content_sid=template.twilio_content_sid,
             recipients_by_id=recipients_by_id,
+            max_retry_attempts=self._max_retry_attempts,
         )
 
         # The Dev Notes' stated auditability mechanism for a Scheduled run
         # (structured logging instead of an audit-log entry) needs an
         # actual outcome summary logged somewhere — without this, nothing
         # records whether a run's dispatch step (e.g. a full Twilio
-        # outage) actually succeeded (code review).
-        failed_count = sum(1 for outcome in outcomes if outcome.status == DeliveryStatus.FAILED)
+        # outage) actually succeeded (code review). Counts both terminal
+        # FAILED and still-retryable FAILED_RETRYABLE outcomes (Story
+        # 4.3) — either way, that recipient didn't cleanly reach SENDING
+        # this run.
+        failed_count = sum(
+            1
+            for outcome in outcomes
+            if outcome.status in (DeliveryStatus.FAILED, DeliveryStatus.FAILED_RETRYABLE)
+        )
         logger.info(
             "scheduled daily report dispatch complete",
             extra={

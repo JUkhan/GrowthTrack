@@ -73,6 +73,18 @@ class TargetType(StrEnum):
     RECIPIENT_LIST = "recipient_list"
 
 
+class WebhookOutcome(StrEnum):
+    """The two-value vocabulary a Twilio status-callback's five-value
+    ``MessageStatus`` gets mapped down to (Story 4.3, AD-1) — keeps
+    Twilio-specific strings out of domain/ signatures.
+    ``queued``/``sent`` intermediate statuses map to neither (our own
+    SENDING already represents "in flight") and are log-and-ignored at the
+    route layer instead."""
+
+    DELIVERED = "delivered"
+    FAILURE = "failure"
+
+
 @dataclass
 class User:
     id: uuid.UUID
@@ -232,6 +244,10 @@ class NotificationDelivery:
     failure_reason: str | None
     created_at: datetime
     updated_at: datetime
+    # The exact Twilio content_variables this row was (or will be) sent
+    # with — persisted so a retry can resend the identical values, since
+    # the live dispatch call itself never stores them anywhere else.
+    content_variables: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

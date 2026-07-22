@@ -8,11 +8,12 @@ polymorphic ``target_type``/``target_id`` pair, not a pure two-FK join row.
 
 from __future__ import annotations
 
+import logging
 import uuid
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, select, text, update
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, and_, or_, select, text, update
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from adapters.persistence.advisory_locks import DAILY_REPORT_LOCK_KEY
 from adapters.persistence.database import Base
+from config import get_settings
 from domain.models import (
     DeliveryStatus,
     MessageTemplate,
@@ -35,6 +37,8 @@ from ports.notifications import (
     NotificationDeliveryRepository,
     NotificationRepository,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class MessageTemplateModel(Base):
@@ -91,6 +95,7 @@ class NotificationDeliveryModel(Base):
     failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    content_variables: Mapped[dict[str, str]] = mapped_column(JSON, nullable=False, default=dict)
 
 
 # Worst-status-wins ranking for the Dashboard's aggregate tile (AC #8) —
@@ -125,6 +130,23 @@ def _notification_to_domain(row: NotificationModel) -> Notification:
         template_id=row.template_id,
         created_by_user_id=row.created_by_user_id,
         created_at=row.created_at,
+    )
+
+
+def _delivery_to_domain(row: NotificationDeliveryModel) -> NotificationDelivery:
+    return NotificationDelivery(
+        id=row.id,
+        notification_id=row.notification_id,
+        notification_type=NotificationType(row.notification_type),
+        recipient_user_id=row.recipient_user_id,
+        operational_day=row.operational_day,
+        status=DeliveryStatus(row.status),
+        attempt_count=row.attempt_count,
+        provider_message_sid=row.provider_message_sid,
+        failure_reason=row.failure_reason,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        content_variables=dict(row.content_variables),
     )
 
 
@@ -221,6 +243,10 @@ class SqlAlchemyNotificationRepository(NotificationRepository):
         )
         return bool(result.scalar())
 
+    async def get_by_id(self, notification_id: uuid.UUID) -> Notification | None:
+        row = await self._session.get(NotificationModel, notification_id)
+        return _notification_to_domain(row) if row is not None else None
+
 
 class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
     def __init__(self, session: AsyncSession) -> None:
@@ -241,6 +267,7 @@ class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
                     failure_reason=row.failure_reason,
                     created_at=row.created_at,
                     updated_at=row.updated_at,
+                    content_variables=row.content_variables,
                 )
             )
         try:
@@ -293,6 +320,59 @@ class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
             )
         )
         await self._session.execute(stmt)
+
+    async def get_by_provider_message_sid(self, sid: str) -> NotificationDelivery | None:
+        stmt = select(NotificationDeliveryModel).where(
+            NotificationDeliveryModel.provider_message_sid == sid
+        )
+        result = await self._session.execute(stmt)
+        rows = result.scalars().all()
+        if not rows:
+            return None
+        if len(rows) > 1:
+            # No DB uniqueness constraint backs the "current SID is unique
+            # per row" invariant this lookup relies on. If it's ever
+            # violated, treat it the same as an unmatched SID (superseded)
+            # rather than raising — a routine Twilio callback must never
+            # 500.
+            logger.warning(
+                "multiple NotificationDelivery rows share provider_message_sid",
+                extra={"provider_message_sid": sid, "row_count": len(rows)},
+            )
+            return None
+        return _delivery_to_domain(rows[0])
+
+    async def update_status_from_webhook(
+        self, delivery_id: uuid.UUID, status: DeliveryStatus, failure_reason: str | None
+    ) -> None:
+        stmt = (
+            update(NotificationDeliveryModel)
+            .where(NotificationDeliveryModel.id == delivery_id)
+            .values(status=status.value, failure_reason=failure_reason, updated_at=_now())
+        )
+        await self._session.execute(stmt)
+
+    async def list_retry_eligible(self, now: datetime) -> list[NotificationDelivery]:
+        settings = get_settings()
+        backoff_minutes_by_attempt = {
+            1: settings.notification_retry_backoff_minutes_1,
+            2: settings.notification_retry_backoff_minutes_2,
+            3: settings.notification_retry_backoff_minutes_3,
+        }
+        stmt = select(NotificationDeliveryModel).where(
+            NotificationDeliveryModel.status == DeliveryStatus.FAILED_RETRYABLE.value,
+            or_(
+                *[
+                    and_(
+                        NotificationDeliveryModel.attempt_count == attempt_count,
+                        NotificationDeliveryModel.updated_at <= now - timedelta(minutes=minutes),
+                    )
+                    for attempt_count, minutes in backoff_minutes_by_attempt.items()
+                ]
+            ),
+        )
+        result = await self._session.execute(stmt)
+        return [_delivery_to_domain(row) for row in result.scalars().all()]
 
     async def most_recent_status_summary(self) -> NotificationStatusSummary | None:
         latest_id_stmt = (

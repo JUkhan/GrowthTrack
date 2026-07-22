@@ -55,6 +55,32 @@ class Settings(BaseSettings):
     twilio_auth_token: str
     twilio_whatsapp_number: str
 
+    # Exact public origin registered as this app's status-callback URL in
+    # the Twilio console — required, no default (deployment-specific, like
+    # twilio_account_sid). Twilio signs the exact POST URL it called; Nginx
+    # doesn't forward the original scheme/host to the API container, so
+    # `request.url` inside FastAPI would be the internal http:// URL, not
+    # what Twilio actually signed. A mismatch here silently breaks
+    # signature verification for every callback (Story 4.3).
+    webhook_public_base_url: str
+
+    # [ASSUMPTION — CONFIRM, PRD §13.12] Retry policy magnitude pending
+    # business confirmation — 3 additional attempts with 1/5/15-minute
+    # exponential backoff is this story's own placeholder default. Capped at
+    # 3 (le=3) because list_retry_eligible's backoff query only has three
+    # hardcoded branches, one per backoff_minutes_1/2/3 setting below — a
+    # value above 3 would leave attempt_count 4+ rows permanently stuck in
+    # FAILED_RETRYABLE, never matched by any branch. Raising this cap
+    # requires adding a matching backoff_minutes_N setting and query branch
+    # first. 0 is a valid, deliberately different operating mode: every
+    # failure (sync or webhook-reported) is immediately terminal, with no
+    # retry at all.
+    notification_max_retry_attempts: int = Field(default=3, ge=0, le=3)
+    notification_retry_backoff_minutes_1: int = Field(default=1, gt=0)
+    notification_retry_backoff_minutes_2: int = Field(default=5, gt=0)
+    notification_retry_backoff_minutes_3: int = Field(default=15, gt=0)
+    notification_retry_poll_interval_seconds: int = Field(default=30, gt=0)
+
     # [ASSUMPTION — CONFIRM] File-drop CSV is this story's own placeholder
     # transport (PRD §13 Open Question #1 leaves the real Source System
     # unresolved) — must be confirmed with the business/ops stakeholder who

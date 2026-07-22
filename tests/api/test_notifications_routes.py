@@ -373,9 +373,12 @@ async def test_compose_and_send_succeeds_and_is_reflected_on_the_dashboard_tile(
     assert status_response.json()["status"] == "sending"
 
 
-async def test_compose_and_send_records_a_whatsapp_rejection_as_failed_not_a_500(
+async def test_compose_and_send_records_a_whatsapp_rejection_as_failed_retryable_not_a_500(
     client, seed_user
 ):
+    # Story 4.3's intentional behavior change: with the default 3-retry
+    # budget, a first failure is failed_retryable (retry-eligible), not
+    # terminal failed.
     await _login_as_admin(client, seed_user)
     team_id = await _create_team(client)
     mobile = "+8801700001004"
@@ -400,7 +403,7 @@ async def test_compose_and_send_records_a_whatsapp_rejection_as_failed_not_a_500
 
     assert response.status_code == 201
     body = response.json()
-    assert body["outcomes"][0]["status"] == "failed"
+    assert body["outcomes"][0]["status"] == "failed_retryable"
     assert body["outcomes"][0]["failure_reason"] == "21610: recipient opted out"
 
 

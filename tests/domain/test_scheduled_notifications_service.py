@@ -203,6 +203,7 @@ def _service(
     templates: FakeMessageTemplateRepository | None = None,
     content: FakeDailyReportContentService | None = None,
     whatsapp: FakeWhatsAppSender | None = None,
+    max_retry_attempts: int = 3,
 ) -> tuple[
     ScheduledReportService,
     FakeNotificationRepository,
@@ -222,6 +223,7 @@ def _service(
         resolution=_resolution(users, opted_in_user_ids),
         content=content,
         whatsapp=whatsapp,
+        max_retry_attempts=max_retry_attempts,
     )
     return service, notifications, deliveries, content
 
@@ -375,6 +377,7 @@ async def test_run_daily_report_skips_a_recipient_deleted_between_resolve_and_ge
         resolution=_resolution([u1, u2], {u1.id, u2.id}),
         content=content,
         whatsapp=whatsapp,
+        max_retry_attempts=3,
     )
 
     result = await service.run_daily_report(_TODAY, _NOW)

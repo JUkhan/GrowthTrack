@@ -45,6 +45,7 @@ jobs:
       TWILIO_ACCOUNT_SID: ci-test-sid
       TWILIO_AUTH_TOKEN: ci-test-token
       TWILIO_WHATSAPP_NUMBER: "+10000000000"
+      WEBHOOK_PUBLIC_BASE_URL: "https://ci-test.example.com"
     steps:
       - uses: actions/checkout@v7
 

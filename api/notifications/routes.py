@@ -27,6 +27,7 @@ from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
 from adapters.whatsapp_twilio.sender import TwilioWhatsAppSender
 from api.auth.dependencies import get_current_user, get_db
+from config import get_settings
 from domain.models import MessageTemplate, User
 from domain.notifications import (
     InvalidTemplateFields,
@@ -302,6 +303,7 @@ async def compose_and_send_notification(
         whatsapp=whatsapp,
         resolution=resolution,
         audit_log=SqlAlchemyAuditLogRepository(session),
+        max_retry_attempts=get_settings().notification_max_retry_attempts,
     )
 
     try:
