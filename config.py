@@ -117,16 +117,17 @@ class Settings(BaseSettings):
     brand_low_performing_n: int = Field(default=5, gt=0)
     brand_focus_n: int = Field(default=5, gt=0)
 
-    # [ASSUMPTION — CONFIRM] The PRD states this exact default explicitly
-    # (prd.md line 176: "the schedule is... [ASSUMPTION: default 07:00
-    # Asia/Dhaka, pending confirmation — §13]") — more concrete than
-    # nightly_import_cron_hour's own placeholder, but still flagged
-    # pending since the PRD itself marks it unconfirmed. 01:00 UTC = 07:00
-    # Asia/Dhaka (UTC+6). ReportSchedule (AD-11, DB-backed, Administrator-
-    # editable) is Story 4.4's job — this is the same provisional
-    # Settings-field-plus-.env-escape-hatch pattern as nightly_import_cron_*.
-    report_send_cron_hour: int = Field(default=1, ge=0, le=23)
-    report_send_cron_minute: int = Field(default=0, ge=0, le=59)
+    # The Daily Report's send time is now a DB-backed ReportSchedule row
+    # (AD-11, Story 4.4), Administrator-editable via Settings — not an
+    # environment variable. This is how often the scheduler polls for
+    # whether today's target time has arrived, matching
+    # notification_retry_poll_interval_seconds's existing precedent of a
+    # short fixed poll rather than a cron. This value is also the worst-case
+    # delay between the configured send time and the actual dispatch —
+    # raising it delays the Daily Report by up to that many seconds. Capped
+    # at 3600s (1 hour) so a misconfigured value can't skip a day's trigger
+    # window entirely.
+    report_schedule_poll_interval_seconds: int = Field(default=60, gt=0, le=3600)
 
     # [ASSUMPTION — CONFIRM] No source document specifies a doctor-list
     # truncation count for the Daily Report (sample-whatsapp-report.md

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 
@@ -132,4 +132,16 @@ class NotificationDeliveryRepository(ABC):
         """Rows with ``status == 'failed_retryable'`` whose backoff window
         (keyed by ``attempt_count``) has elapsed as of ``now`` (Story 4.3,
         AC #4/#5)."""
+        ...
+
+    @abstractmethod
+    async def exists_for_operational_day(self, operational_day: date) -> bool:
+        """Whether any delivery row already carries this ``operational_day``
+        (Story 4.4 code review) — only Scheduled deliveries ever set
+        ``operational_day`` (Manual always passes ``None``), so this is a
+        cheap "has today's Daily Report already been dispatched" check the
+        scheduler's interval-poll job can use to skip re-invoking
+        ``ScheduledReportService`` on every tick after the first successful
+        dispatch, without duplicating AD-2's own partial-unique-index
+        dedup logic."""
         ...

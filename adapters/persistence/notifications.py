@@ -13,7 +13,19 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import cast
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, and_, or_, select, text, update
+from sqlalchemy import (
+    Date,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    and_,
+    exists,
+    or_,
+    select,
+    text,
+    update,
+)
 from sqlalchemy.dialects.postgresql import JSON, UUID
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.exc import IntegrityError
@@ -373,6 +385,13 @@ class SqlAlchemyNotificationDeliveryRepository(NotificationDeliveryRepository):
         )
         result = await self._session.execute(stmt)
         return [_delivery_to_domain(row) for row in result.scalars().all()]
+
+    async def exists_for_operational_day(self, operational_day: date) -> bool:
+        stmt = select(
+            exists().where(NotificationDeliveryModel.operational_day == operational_day)
+        )
+        result = await self._session.execute(stmt)
+        return bool(result.scalar())
 
     async def most_recent_status_summary(self) -> NotificationStatusSummary | None:
         latest_id_stmt = (

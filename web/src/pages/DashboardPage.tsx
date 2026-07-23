@@ -303,6 +303,9 @@ function DashboardPage() {
         <Link component={RouterLink} to="/recipients">
           Recipients
         </Link>
+        <Link component={RouterLink} to="/settings">
+          Settings
+        </Link>
         <Button variant="outlined" disabled={submitting} onClick={handleLogout}>
           Log out
         </Button>

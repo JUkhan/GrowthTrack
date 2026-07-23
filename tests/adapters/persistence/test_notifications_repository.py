@@ -551,6 +551,33 @@ async def test_scheduled_partial_unique_index_rejects_a_same_day_duplicate_for_t
             await session.commit()
 
 
+async def test_exists_for_operational_day_reflects_a_scheduled_dispatch():
+    user = await _seed_user("+8801700000920")
+    template = await _seed_template("Exists For Operational Day Notice")
+    notification = await _seed_notification(template.id, user.id)
+    today = datetime.now(UTC).date()
+    session_factory = create_session_factory()
+
+    async with session_factory() as session:
+        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
+        assert await deliveries.exists_for_operational_day(today) is False
+
+    row = _delivery_row(
+        notification.id,
+        user.id,
+        notification_type=NotificationType.SCHEDULED,
+        operational_day=today,
+    )
+    async with session_factory() as session:
+        await SqlAlchemyNotificationDeliveryRepository(session).bulk_create([row])
+        await session.commit()
+
+    async with session_factory() as session:
+        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
+        assert await deliveries.exists_for_operational_day(today) is True
+        assert await deliveries.exists_for_operational_day(today + timedelta(days=1)) is False
+
+
 async def test_bulk_create_rolls_back_so_the_session_stays_usable_after_a_caught_duplicate():
     # Regression test (code review): a failed flush leaves an AsyncSession's
     # transaction unusable for any further statement until it's rolled

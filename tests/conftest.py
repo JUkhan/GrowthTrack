@@ -9,7 +9,7 @@ from sqlalchemy import text
 from adapters.persistence.database import create_engine, create_session_factory
 from adapters.persistence.users import SqlAlchemyUserRepository
 from api.main import app
-from domain.models import Role, User, UserStatus
+from domain.models import REPORT_SCHEDULE_ID, Role, User, UserStatus
 from ports.auth import PwdlibPasswordHasher
 
 
@@ -37,6 +37,18 @@ async def _clean_tables() -> AsyncIterator[None]:
         # opt_in_consents.user_id carries a ForeignKey("users.id"), same
         # reasoning as password_reset_tokens/recipient_list_members.
         await conn.execute(text("DELETE FROM opt_in_consents"))
+        # report_schedules.updated_by_user_id also carries a
+        # ForeignKey("users.id") — this reset (not a DELETE; see below) must
+        # run before DELETE FROM users or a prior test's actor reference
+        # blocks that delete with a FK violation.
+        await conn.execute(
+            text(
+                "UPDATE report_schedules SET send_hour_utc = 1, send_minute_utc = 0, "
+                "updated_by_user_id = NULL, updated_at = '2026-07-23T00:00:00+00:00' "
+                "WHERE id = :id"
+            ),
+            {"id": REPORT_SCHEDULE_ID},
+        )
         await conn.execute(text("DELETE FROM users"))
         await conn.execute(text("DELETE FROM revoked_tokens"))
         # Staging tables and sales_data reference import_runs/teams, so

@@ -18,6 +18,7 @@ from api.recipients.routes import recipient_lists_router
 from api.recipients.routes import teams_router as recipients_teams_router
 from api.recipients.routes import users_router as recipients_users_router
 from api.routes.health import router as health_router
+from api.settings.routes import settings_router
 from api.webhooks.routes import webhooks_router
 
 logging.basicConfig(level=logging.INFO)
@@ -77,3 +78,4 @@ app.include_router(recipient_lists_router)
 app.include_router(message_templates_router)
 app.include_router(notifications_router)
 app.include_router(webhooks_router)
+app.include_router(settings_router)

@@ -10,7 +10,7 @@ import json
 import logging
 import pathlib
 import signal
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.blocking import BlockingScheduler
@@ -27,6 +27,7 @@ from adapters.persistence.notifications import (
 )
 from adapters.persistence.recipient_lists import SqlAlchemyRecipientListRepository
 from adapters.persistence.sales_data import SqlAlchemySalesDataRepository
+from adapters.persistence.settings import SqlAlchemyReportScheduleRepository
 from adapters.persistence.staging import SqlAlchemyStagingRepository
 from adapters.persistence.teams import SqlAlchemyTeamRepository
 from adapters.persistence.users import SqlAlchemyUserRepository
@@ -36,6 +37,7 @@ from config import get_settings
 from domain.daily_report import DailyReportContentService
 from domain.ingestion import SourceSystemImportService
 from domain.metrics import BrandPerformanceService, DashboardMetricsService, DoctorVisitListService
+from domain.models import ReportSchedule
 from domain.notifications import RecipientResolutionService, dispatch_deliveries
 from domain.scheduled_notifications import ScheduledReportService
 
@@ -104,6 +106,17 @@ async def _run_nightly_import_async() -> None:
         await session.commit()
 
 
+def _should_run_daily_report(now: datetime, schedule: ReportSchedule) -> bool:
+    """Pure, directly-testable boundary check: has today's UTC target time
+    (the ReportSchedule row's own already-UTC hour/minute) arrived yet?
+    Written as a standalone helper so scheduler tests don't need to mock
+    APScheduler internals to exercise it."""
+    today_target = datetime.combine(
+        now.date(), time(schedule.send_hour_utc, schedule.send_minute_utc), tzinfo=UTC
+    )
+    return now >= today_target
+
+
 def _run_daily_report() -> None:
     try:
         asyncio.run(_run_daily_report_async())
@@ -121,10 +134,27 @@ async def _run_daily_report_async() -> None:
     today = now.astimezone(ZoneInfo("Asia/Dhaka")).date()
 
     async with session_factory() as session:
+        schedule = await SqlAlchemyReportScheduleRepository(session).get()
+        if not _should_run_daily_report(now, schedule):
+            return
+
+        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
+        # The interval job (Story 4.4) re-enters this function on every poll
+        # tick for the rest of the day once _should_run_daily_report goes
+        # true — without this check, each tick would call
+        # ScheduledReportService.run_daily_report() again, which creates and
+        # commits a new Notification row *before* reaching AD-2's partial
+        # unique index (that index lives on notification_deliveries, not
+        # notifications), leaving a zero-delivery orphan Notification behind
+        # every tick. Only Scheduled deliveries ever set operational_day
+        # (Manual always passes None), so this is a cheap, correct "already
+        # dispatched today" check (code review).
+        if await deliveries.exists_for_operational_day(today):
+            return
+
         users = SqlAlchemyUserRepository(session)
         teams = SqlAlchemyTeamRepository(session)
         notifications = SqlAlchemyNotificationRepository(session)
-        deliveries = SqlAlchemyNotificationDeliveryRepository(session)
         templates = SqlAlchemyMessageTemplateRepository(session)
 
         resolution = RecipientResolutionService(
@@ -279,14 +309,17 @@ def _register_jobs(scheduler: BlockingScheduler) -> None:
         minute=settings.nightly_import_cron_minute,
         id="nightly_import",
     )
-    # [ASSUMPTION — CONFIRM] 01:00 UTC = 07:00 Asia/Dhaka default — the
-    # PRD's own stated placeholder (see config.py's report_send_cron_hour
-    # docstring), still pending business confirmation.
+    # "interval", not "cron": the ReportSchedule row (AD-11, Story 4.4) is
+    # DB-backed and Administrator-editable via Settings, so a redeploy must
+    # never be required to change the send time — a cron trigger's
+    # hour/minute is fixed at process-start, which would defeat that.
+    # Mirrors retry_failed_deliveries's own "poll continuously, read current
+    # DB state inside the job" shape. _should_run_daily_report reads the
+    # fresh schedule on every tick and decides whether to actually dispatch.
     scheduler.add_job(
         _run_daily_report,
-        "cron",
-        hour=settings.report_send_cron_hour,
-        minute=settings.report_send_cron_minute,
+        "interval",
+        seconds=settings.report_schedule_poll_interval_seconds,
         id="daily_report",
     )
     # "interval", not "cron": this polls continuously for retry-eligible

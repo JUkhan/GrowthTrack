@@ -2,9 +2,10 @@ import uuid
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import pytest
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from domain.models import DeliveryStatus, NotificationDelivery, NotificationType
+from domain.models import DeliveryStatus, NotificationDelivery, NotificationType, ReportSchedule
 from scheduler import main as scheduler_main
 
 
@@ -39,6 +40,138 @@ def test_register_jobs_registers_heartbeat_and_nightly_import():
     trigger_fields = {field.name: str(field) for field in nightly_import.trigger.fields}
     assert trigger_fields["hour"] == str(settings.nightly_import_cron_hour)
     assert trigger_fields["minute"] == str(settings.nightly_import_cron_minute)
+
+
+def test_register_jobs_registers_daily_report_as_an_interval_job_not_cron():
+    scheduler = BlockingScheduler(timezone="UTC")
+
+    scheduler_main._register_jobs(scheduler)
+
+    daily_report = scheduler.get_job("daily_report")
+    assert daily_report is not None
+    settings = scheduler_main.get_settings()
+    expected_seconds = settings.report_schedule_poll_interval_seconds
+    assert daily_report.trigger.interval.total_seconds() == expected_seconds
+
+
+@pytest.mark.parametrize(
+    "now,schedule_hour,schedule_minute,expected",
+    [
+        # now before today's target -> False.
+        (datetime(2026, 7, 23, 0, 59, tzinfo=UTC), 1, 0, False),
+        # now exactly at today's target (same day) -> True.
+        (datetime(2026, 7, 23, 1, 0, tzinfo=UTC), 1, 0, True),
+        # now after today's target (same day) -> True.
+        (datetime(2026, 7, 23, 1, 1, tzinfo=UTC), 1, 0, True),
+        # A schedule crossing UTC midnight is still evaluated purely in UTC
+        # terms for "today" — no Asia/Dhaka date-boundary confusion.
+        (datetime(2026, 7, 23, 23, 30, tzinfo=UTC), 23, 45, False),
+        (datetime(2026, 7, 23, 23, 45, tzinfo=UTC), 23, 45, True),
+    ],
+)
+def test_should_run_daily_report(now, schedule_hour, schedule_minute, expected):
+    schedule = ReportSchedule(
+        id=uuid.uuid4(),
+        send_hour_utc=schedule_hour,
+        send_minute_utc=schedule_minute,
+        updated_at=now,
+        updated_by_user_id=None,
+    )
+
+    assert scheduler_main._should_run_daily_report(now, schedule) == expected
+
+
+async def test_run_daily_report_async_skips_dispatch_when_todays_target_has_not_arrived(
+    monkeypatch,
+):
+    # An hour from now, same UTC calendar day guaranteed by capping to 23:59
+    # — always in the future relative to "now" regardless of when the test
+    # itself runs.
+    now = datetime.now(UTC)
+    future_hour = min(now.hour + 1, 23)
+    future_schedule = ReportSchedule(
+        id=uuid.uuid4(),
+        send_hour_utc=future_hour,
+        send_minute_utc=59,
+        updated_at=now,
+        updated_by_user_id=None,
+    )
+
+    class _FakeReportScheduleRepository:
+        async def get(self):
+            return future_schedule
+
+    class _FakeSession:
+        async def __aenter__(self) -> "_FakeSession":
+            return self
+
+        async def __aexit__(self, *exc_info) -> None:
+            return None
+
+    monkeypatch.setattr(scheduler_main, "create_session_factory", lambda: (lambda: _FakeSession()))
+    monkeypatch.setattr(
+        scheduler_main,
+        "SqlAlchemyReportScheduleRepository",
+        lambda session: _FakeReportScheduleRepository(),
+    )
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("ScheduledReportService must not be constructed when skipping")
+
+    monkeypatch.setattr(scheduler_main, "ScheduledReportService", _fail_if_called)
+
+    await scheduler_main._run_daily_report_async()  # must not raise
+
+
+async def test_run_daily_report_async_skips_dispatch_when_already_sent_today(monkeypatch):
+    # Regression test (code review): the interval job re-enters this
+    # function on every poll tick for the rest of the day once today's
+    # target time has passed — without this guard, each tick would call
+    # ScheduledReportService again, creating a new orphan Notification row
+    # before AD-2's partial unique index (on notification_deliveries, not
+    # notifications) ever catches the duplicate.
+    now = datetime.now(UTC)
+    past_schedule = ReportSchedule(
+        id=uuid.uuid4(),
+        send_hour_utc=0,
+        send_minute_utc=0,
+        updated_at=now,
+        updated_by_user_id=None,
+    )
+
+    class _FakeReportScheduleRepository:
+        async def get(self):
+            return past_schedule
+
+    class _FakeDeliveries:
+        async def exists_for_operational_day(self, operational_day):
+            return True
+
+    class _FakeSession:
+        async def __aenter__(self) -> "_FakeSession":
+            return self
+
+        async def __aexit__(self, *exc_info) -> None:
+            return None
+
+    monkeypatch.setattr(scheduler_main, "create_session_factory", lambda: (lambda: _FakeSession()))
+    monkeypatch.setattr(
+        scheduler_main,
+        "SqlAlchemyReportScheduleRepository",
+        lambda session: _FakeReportScheduleRepository(),
+    )
+    monkeypatch.setattr(
+        scheduler_main,
+        "SqlAlchemyNotificationDeliveryRepository",
+        lambda session: _FakeDeliveries(),
+    )
+
+    def _fail_if_called(*args, **kwargs):
+        raise AssertionError("ScheduledReportService must not be constructed when skipping")
+
+    monkeypatch.setattr(scheduler_main, "ScheduledReportService", _fail_if_called)
+
+    await scheduler_main._run_daily_report_async()  # must not raise
 
 
 def test_register_jobs_registers_retry_failed_deliveries_with_the_configured_interval():

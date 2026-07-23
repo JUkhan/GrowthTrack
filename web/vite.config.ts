@@ -19,6 +19,7 @@ export default defineConfig({
       '/dashboard/notification-status': 'http://localhost:8000',
       '/notifications': 'http://localhost:8000',
       '/message-templates': 'http://localhost:8000',
+      '/settings': 'http://localhost:8000',
     },
   },
   test: {

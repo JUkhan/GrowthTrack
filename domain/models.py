@@ -257,3 +257,21 @@ class NotificationStatusSummary:
     # so one late per-recipient failure/success can't hide the others.
     status: DeliveryStatus
     updated_at: datetime
+
+
+# Fixed, well-known primary key for the ReportSchedule singleton row
+# (Story 4.4) — there is exactly one schedule, ever, so get() never needs a
+# "first row" query. Seeded by alembic/versions/7d3e9c2a5f81_report_schedule.py;
+# import this constant everywhere else that needs it rather than inventing a
+# second one.
+REPORT_SCHEDULE_ID: uuid.UUID = uuid.UUID("00000000-0000-0000-0000-000000000001")
+
+
+@dataclass
+class ReportSchedule:
+    id: uuid.UUID
+    send_hour_utc: int
+    send_minute_utc: int
+    updated_at: datetime
+    # None for the migration-seeded initial value — no human actor.
+    updated_by_user_id: uuid.UUID | None
