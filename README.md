@@ -87,3 +87,32 @@ No later story re-scaffolds them — later stories build directly on this
 foundation (add packages/modules within it, extend `docker-compose.yml`
 incrementally, add CI steps as needed), rather than re-establishing project
 structure, container topology, or CI configuration from scratch.
+
+
+
+Who gets it: Every active User in the system who has a mobile number on file and active WhatsApp opt-in consent. It's not role-based, not per-client/account, and not a curated recipient list — it's derived from the whole user directory at send time.
+
+Where it happens:
+- scheduler/main.py — the scheduler fires _run_daily_report_async when the current UTC time crosses the configured send time (ReportSchedule.send_hour_utc/send_minute_utc).
+- domain/scheduled_notifications.py (ScheduledReportService.run_daily_report, lines ~107-277) — pulls all users, filters to status == ACTIVE, then hands them to the shared recipient-resolution service.
+- domain/notifications.py (RecipientResolutionService.resolve, lines ~104-155) — applies the final eligibility filter.
+
+Final filter (exact logic):
+for user_id in deduped_ids:
+    user = users_by_id.get(user_id)
+    if (
+        user is None
+        or user.status != UserStatus.ACTIVE
+        or user.mobile is None
+        or user_id not in active_consent_by_user
+    ):
+        ineligible_count += 1
+        continue
+    sendable_ids.append(user_id)
+So a user must: exist → be ACTIVE → have a mobile number → have an active OptInConsent row. Administrators are excluded in practice (they typically have no mobile), but that's incidental — there's no explicit role filter.
+
+What's NOT involved: RecipientList ("Groups/Channels") and Team-based targeting from Story 4.1 exist only for the manual notification compose flow. The daily report explicitly passes team_ids=[] and recipient_list_ids=[], bypassing them entirely (see comment at domain/scheduled_notifications.py:119-121).
+
+What Story 4.4 actually configures: just the send time, stored as a singleton ReportSchedule row and edited via SettingsPage.tsx / GET/PATCH /settings/report-schedule. The implementation doc for that story explicitly notes: "no per-recipient customization exists in Phase 1."
+
+Content personalization: while recipients aren't filtered by team, the report content each user sees is scoped by Territory — derived by matching the user's Team.name against Doctor.territory (case-insensitive), per DailyReportContentService.resolve_territories.
